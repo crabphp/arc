@@ -173,6 +173,47 @@ final class ArcTest extends TestCase
         }
     }
 
+    public function testComponentPropsAreCheckedAtCompileTime(): void
+    {
+        $this->component('card', '@props(string $title, string $footer = \'\'){!! $title !!}{!! $footer !!}');
+        $this->view('unknown', "\n<Card wrong=\"x\" />");
+        try {
+            $this->arc()->render('unknown');
+            self::fail('An undeclared prop compiled.');
+        } catch (ArcException $error) {
+            self::assertStringContainsString('has no prop $wrong', $error->getMessage());
+            self::assertStringContainsString('on line 2', $error->getMessage());
+        }
+
+        $this->view('missing', '<Card />');
+        $this->expectExceptionMessage('needs the prop $title');
+        $this->arc()->render('missing');
+    }
+
+    public function testLoopControlCannotEscapeIntoAComponentClosure(): void
+    {
+        $this->component('card', '@props(string $slot = \'\'){!! $slot !!}');
+        $this->view('page', "@foreach(\$items as \$item)\n<Card>@break</Card>\n@endforeach");
+
+        $this->expectExceptionMessage('@break is not inside a loop');
+        $this->arc()->render('page', ['items' => [1]]);
+    }
+
+    public function testComponentRuntimeErrorsNameTheCallingTemplateLine(): void
+    {
+        $this->component('card', '@props(string $title){!! $title->missing() !!}');
+        $this->view('page', "\n<Card title=\"broken\" />");
+
+        try {
+            $this->arc()->render('page');
+            self::fail('The component error was swallowed.');
+        } catch (ArcException $error) {
+            self::assertStringContainsString('on line 2', $error->getMessage());
+            self::assertStringContainsString('page.arc.php', $error->getMessage());
+            self::assertInstanceOf(\Error::class, $error->getPrevious());
+        }
+    }
+
     public function testATemplateIsCompiledOnceAndAgainWhenItChanges(): void
     {
         $this->view('page', 'one');

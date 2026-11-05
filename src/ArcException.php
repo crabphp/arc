@@ -14,4 +14,12 @@ final class ArcException extends \RuntimeException
     {
         return new self("{$message} in {$file} on line {$line}.");
     }
+
+    public static function runtime(string $file, int $line, \Throwable $previous): self
+    {
+        if ($previous instanceof self) {
+            return $previous;
+        }
+        return new self("{$previous->getMessage()} in {$file} on line {$line}.", 0, $previous);
+    }
 }

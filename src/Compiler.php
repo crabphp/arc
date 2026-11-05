@@ -21,7 +21,7 @@ final class Compiler
     /**
      * Part of every compiled file's name: a new compiler compiles again.
      */
-    public const string VERSION = '1';
+    public const string VERSION = '2';
 
     private const array WITH_ARGUMENTS = ['if', 'elseif', 'unless', 'foreach', 'for', 'while', 'props'];
     private const array WITHOUT_ARGUMENTS = [
@@ -41,9 +41,10 @@ final class Compiler
     private int $position = 0;
     private string $code = '';
     /**
-     * Pending parts of the current append: [true, text] or [false, expression].
+     * Pending parts of the current append: [true, text, null] or
+     * [false, expression, component line or null].
      *
-     * @var list<array{bool, string}>
+     * @var list<array{bool, string, int|null}>
      */
     private array $parts = [];
     /**
@@ -71,11 +72,23 @@ final class Compiler
      */
     private array $components = [];
     private ?string $props = null;
+    /**
+     * @var array<string, array{required: bool, variadic: bool}>
+     */
+    private array $definitions = [];
+    /**
+     * @var array<string, array<string, array{required: bool, variadic: bool}>>
+     */
+    private array $componentDefinitions = [];
     private int $counter = 0;
     /**
      * @var \Closure(string): bool
      */
     private \Closure $exists;
+    /**
+     * @var \Closure(string): ?array{parameters: string, file: string, line: int}|null
+     */
+    private ?\Closure $propsFor = null;
     /**
      * @var array<string, bool>
      */
@@ -85,10 +98,17 @@ final class Compiler
      * @param string $file The template's path, for messages.
      * @param bool $component Whether it is a component, which takes props rather than data.
      * @param \Closure(string): bool $exists Whether a component's file exists, by its file name such as product-grid.
+     * @param (\Closure(string): ?array{parameters: string, file: string, line: int})|null $propsFor A component's @props declaration.
      */
-    public function compile(string $source, string $file, bool $component, \Closure $exists): string
-    {
+    public function compile(
+        string $source,
+        string $file,
+        bool $component,
+        \Closure $exists,
+        ?\Closure $propsFor = null,
+    ): string {
         $this->exists = $exists;
+        $this->propsFor = $propsFor;
         $this->known = [];
         $this->source = $source;
         $this->file = $file;
@@ -101,6 +121,8 @@ final class Compiler
         $this->tags = [];
         $this->components = [];
         $this->props = null;
+        $this->definitions = [];
+        $this->componentDefinitions = [];
         $this->counter = 0;
 
         $this->body();
@@ -246,6 +268,7 @@ final class Compiler
             $escape
                 ? "\\htmlspecialchars((string) ({$expression}), \\ENT_QUOTES | \\ENT_SUBSTITUTE)"
                 : "({$expression})",
+            null,
         ];
     }
 
@@ -357,7 +380,12 @@ final class Compiler
 
     private function loopStatement(int $at, string $name): void
     {
-        foreach (array_reverse($this->blocks) as [$kind]) {
+        $tag = end($this->tags);
+        $outside = $tag === false ? 0 : $tag['blocks'];
+        foreach (array_reverse($this->blocks, true) as $index => [$kind]) {
+            if ($index < $outside) {
+                continue;
+            }
             if (!in_array($kind, ['foreach', 'for', 'while'], true)) {
                 continue;
             }
@@ -384,6 +412,14 @@ final class Compiler
         if ($this->props !== null) {
             throw $this->error($at, '@props is declared twice');
         }
+        $this->definitions = self::definitions($parameters, $this->file, $this->line($at));
+        if (self::hasVariadic($this->definitions)) {
+            throw $this->error($at, '@props cannot declare a variadic parameter.');
+        }
+        if (isset($this->definitions['slot']) && $this->definitions['slot']['required']) {
+            throw $this->error($at, '@props must give $slot a default value, such as string $slot = \'\'');
+        }
+        $this->definitions['slot'] ??= ['required' => false, 'variadic' => false];
         $this->props = $parameters;
     }
 
@@ -430,9 +466,15 @@ final class Compiler
                 "<{$name}> has no component: write components/" . str_replace('.', '/', $file) . '.arc.php',
             );
         }
+        $definition = $this->definition($file, $at);
+        foreach ($attributes as $prop => $_) {
+            if (!isset($definition[$prop]) && !self::hasVariadic($definition)) {
+                throw $this->error($at, "<{$name}> has no prop $" . $prop);
+            }
+        }
         $this->components[$file] ??= $this->variable('c');
         if ($selfClosing) {
-            $this->parts[] = [false, $this->call($name, $attributes, [])];
+            $this->parts[] = [false, $this->call($name, $attributes, [], $this->line($at)), $this->line($at)];
             return;
         }
         $this->flush();
@@ -481,26 +523,250 @@ final class Compiler
         }
         $slots = $tag['slots'];
         $slots['slot'] = $tag['output'];
-        $this->parts[] = [false, $this->call($name, $tag['props'], $slots)];
+        $this->parts[] = [false, $this->call($name, $tag['props'], $slots, $tag['line']), $tag['line']];
     }
 
     /**
      * @param array<string, string> $props
      * @param array<string, string> $slots
      */
-    private function call(string $name, array $props, array $slots): string
+    private function call(string $name, array $props, array $slots, int $line): string
     {
+        $definition = $this->definition(self::file($name), 0);
         $arguments = ['$__arc'];
+        $provided = $props + $slots;
+        $positional = true;
+        foreach ($definition as $prop => $details) {
+            if ($details['required'] && !array_key_exists($prop, $provided)) {
+                throw $this->errorForLine($line, "<{$name}> needs the prop $" . $prop);
+            }
+            if (!array_key_exists($prop, $provided)) {
+                $positional = false;
+                continue;
+            }
+            $expression = $provided[$prop];
+            if ($positional && !$details['variadic']) {
+                $arguments[] = $expression;
+            } else {
+                $arguments[] = "{$prop}: {$expression}";
+                $positional = false;
+            }
+        }
         foreach ($props as $prop => $expression) {
             if (isset($slots[$prop])) {
                 throw new ArcException("{$prop} is given to <{$name}> as an attribute and as a slot in {$this->file}.");
             }
-            $arguments[] = "{$prop}: {$expression}";
+            if (!isset($definition[$prop])) {
+                $arguments[] = "{$prop}: {$expression}";
+            }
         }
         foreach ($slots as $slot => $variable) {
-            $arguments[] = "{$slot}: {$variable}";
+            if (!isset($definition[$slot]) && !self::hasVariadic($definition)) {
+                throw $this->errorForLine($line, "<{$name}> has no slot $" . $slot);
+            }
+            if (!isset($definition[$slot])) {
+                $arguments[] = "{$slot}: {$variable}";
+            }
         }
         return $this->components[self::file($name)] . '(' . implode(', ', $arguments) . ')';
+    }
+
+    /**
+     * @return array<string, array{required: bool, variadic: bool}>
+     */
+    private function definition(string $file, int $at): array
+    {
+        if (isset($this->componentDefinitions[$file])) {
+            return $this->componentDefinitions[$file];
+        }
+        if ($this->propsFor === null) {
+            return $this->componentDefinitions[$file] = [
+                '__arc_unknown_props' => ['required' => false, 'variadic' => true],
+                'slot' => ['required' => false, 'variadic' => false],
+            ];
+        }
+        $declaration = ($this->propsFor)($file);
+        if ($declaration === null) {
+            return $this->componentDefinitions[$file] = [
+                'slot' => ['required' => false, 'variadic' => false],
+            ];
+        }
+        if ($declaration['parameters'] === '') {
+            throw ArcException::at($declaration['file'], $declaration['line'], '@props has empty parentheses.');
+        }
+        $definitions = self::definitions($declaration['parameters'], $declaration['file'], $declaration['line']);
+        if (self::hasVariadic($definitions)) {
+            throw ArcException::at(
+                $declaration['file'],
+                $declaration['line'],
+                '@props cannot declare a variadic parameter.',
+            );
+        }
+        if (isset($definitions['slot']) && $definitions['slot']['required']) {
+            throw $this->error(
+                $at,
+                'The component must give $slot a default value, such as string $slot = \'\' in '
+                . $declaration['file']
+                . ' on line '
+                . $declaration['line'],
+            );
+        }
+        $definitions['slot'] ??= ['required' => false, 'variadic' => false];
+        return $this->componentDefinitions[$file] = $definitions;
+    }
+
+    /**
+     * @param array<string, array{required: bool, variadic: bool}> $definition
+     */
+    private static function hasVariadic(array $definition): bool
+    {
+        foreach ($definition as $details) {
+            if ($details['variadic']) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @return array<string, array{required: bool, variadic: bool}>
+     */
+    private static function definitions(string $parameters, string $file, int $line): array
+    {
+        if (trim($parameters) === '') {
+            return [];
+        }
+        $definitions = [];
+        foreach (self::parameterParts($parameters, $file, $line) as $part) {
+            if (!preg_match(
+                '/^(?<before>.*?)(?<variadic>\.\.\.)?\$(?<name>[A-Za-z_][A-Za-z0-9_]*)(?:\s*=\s*(?<default>.*))?$/sD',
+                $part,
+                $match,
+            )) {
+                throw ArcException::at(
+                    $file,
+                    $line,
+                    'The @props parameter ' . self::literalForMessage($part) . ' is not valid.',
+                );
+            }
+            $before = trim($match['before']);
+            if ($before !== '' && preg_match('/[^A-Za-z0-9_\\\\?|&\\s]/', $before) === 1) {
+                throw ArcException::at(
+                    $file,
+                    $line,
+                    'The @props parameter ' . self::literalForMessage($part) . ' is not valid.',
+                );
+            }
+            $name = $match['name'];
+            if ($name === '__arc') {
+                throw ArcException::at($file, $line, '@props cannot declare the reserved $__arc parameter.');
+            }
+            if (isset($definitions[$name])) {
+                throw ArcException::at($file, $line, 'The @props parameter $' . $name . ' is declared twice.');
+            }
+            $definitions[$name] = [
+                'required' => !isset($match['default']) && $match['variadic'] === '',
+                'variadic' => $match['variadic'] !== '',
+            ];
+        }
+        return $definitions;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function parameterParts(string $parameters, string $file, int $line): array
+    {
+        $parts = [];
+        $start = 0;
+        $depth = 0;
+        $quote = null;
+        $length = strlen($parameters);
+        for ($index = 0; $index < $length; ++$index) {
+            $char = $parameters[$index];
+            if ($quote !== null) {
+                if ($char === '\\') {
+                    ++$index;
+                } elseif ($char === $quote) {
+                    $quote = null;
+                }
+                continue;
+            }
+            if ($char === '\'' || $char === '"') {
+                $quote = $char;
+            } elseif (in_array($char, ['(', '[', '{'], true)) {
+                ++$depth;
+            } elseif (in_array($char, [')', ']', '}'], true)) {
+                --$depth;
+                if ($depth < 0) {
+                    throw ArcException::at($file, $line, 'The @props parameters have unbalanced brackets.');
+                }
+            } elseif ($char === ',' && $depth === 0) {
+                $part = trim(substr($parameters, $start, $index - $start));
+                if ($part === '') {
+                    throw ArcException::at($file, $line, 'The @props parameters contain an empty item.');
+                }
+                $parts[] = $part;
+                $start = $index + 1;
+            }
+        }
+        if ($quote !== null || $depth !== 0) {
+            throw ArcException::at($file, $line, 'The @props parameters are not closed.');
+        }
+        $part = trim(substr($parameters, $start));
+        if ($part === '') {
+            throw ArcException::at($file, $line, 'The @props parameters contain an empty item.');
+        }
+        $parts[] = $part;
+        return $parts;
+    }
+
+    /**
+     * Finds a component's @props declaration without compiling its body.
+     *
+     * @return array{parameters: string, line: int}|null
+     */
+    public static function propsDeclaration(string $source): ?array
+    {
+        if (preg_match('/@props\\b/', $source, $match, PREG_OFFSET_CAPTURE) !== 1) {
+            return null;
+        }
+        $at = $match[0][1];
+        $start = $at + strlen($match[0][0]);
+        while (($source[$start] ?? '') === ' ' || ($source[$start] ?? '') === "\t") {
+            ++$start;
+        }
+        if (($source[$start] ?? '') !== '(') {
+            return ['parameters' => '', 'line' => substr_count($source, "\n", 0, $at) + 1];
+        }
+        $depth = 0;
+        $quote = null;
+        $length = strlen($source);
+        for ($index = $start; $index < $length; ++$index) {
+            $char = $source[$index];
+            if ($quote !== null) {
+                if ($char === '\\') {
+                    ++$index;
+                } elseif ($char === $quote) {
+                    $quote = null;
+                }
+                continue;
+            }
+            if ($char === '\'' || $char === '"') {
+                $quote = $char;
+            } elseif ($char === '(') {
+                ++$depth;
+            } elseif ($char === ')' && --$depth === 0) {
+                return [
+                    'parameters' => trim(substr($source, $start + 1, $index - $start - 1)),
+                    'line' => substr_count($source, "\n", 0, $at) + 1,
+                ];
+            }
+        }
+        return [
+            'parameters' => substr($source, $start + 1),
+            'line' => substr_count($source, "\n", 0, $at) + 1,
+        ];
     }
 
     /**
@@ -554,8 +820,18 @@ final class Compiler
             if ($quote !== '"' && $quote !== '\'') {
                 throw $this->error($at, "The value of {$match[2]} must be in quotes");
             }
-            $end = strpos($this->source, $quote, $this->position + 1);
-            if ($end === false) {
+            $end = $this->position + 1;
+            while ($end < $length) {
+                if ($this->source[$end] === '\\') {
+                    $end += 2;
+                    continue;
+                }
+                if ($this->source[$end] === $quote) {
+                    break;
+                }
+                ++$end;
+            }
+            if ($end >= $length) {
                 throw $this->error($at, "The value of {$match[2]} is not closed");
             }
             $value = substr($this->source, $this->position + 1, $end - $this->position - 1);
@@ -605,7 +881,7 @@ final class Compiler
             $this->parts[$last][1] .= $text;
             return;
         }
-        $this->parts[] = [true, $text];
+        $this->parts[] = [true, $text, null];
     }
 
     /**
@@ -617,11 +893,23 @@ final class Compiler
             return;
         }
         $expressions = [];
-        foreach ($this->parts as [$literal, $part]) {
+        $line = null;
+        foreach ($this->parts as [$literal, $part, $componentLine]) {
             $expressions[] = $literal ? self::literal($part) : $part;
+            $line ??= $componentLine;
         }
         $this->parts = [];
-        $this->code .= '    ' . end($this->outputs) . ' .= ' . implode(' . ', $expressions) . ";\n";
+        $statement = end($this->outputs) . ' .= ' . implode(' . ', $expressions) . ';';
+        if ($line === null) {
+            $this->code .= "    {$statement}\n";
+            return;
+        }
+        $file = self::literal($this->file);
+        $this->code .=
+            "    try {\n        {$statement}\n"
+            . "    } catch (\\Throwable \$__error) {\n"
+            . "        throw \\Crab\\Arc\\ArcException::runtime({$file}, {$line}, \$__error);\n"
+            . "    }\n";
     }
 
     private function variable(string $kind): string
@@ -637,6 +925,16 @@ final class Compiler
     private function error(int $at, string $message): ArcException
     {
         return ArcException::at($this->file, $this->line($at), $message);
+    }
+
+    private function errorForLine(int $line, string $message): ArcException
+    {
+        return ArcException::at($this->file, $line, $message);
+    }
+
+    private static function literalForMessage(string $value): string
+    {
+        return '"' . str_replace('"', '\\"', $value) . '"';
     }
 
     private static function literal(string $text): string

@@ -39,6 +39,10 @@ final class Arc
      * @var \Closure(string): bool
      */
     private readonly \Closure $exists;
+    /**
+     * @var \Closure(string): ?array{parameters: string, file: string, line: int}
+     */
+    private readonly \Closure $props;
 
     /**
      * @param string $path The folder of the templates.
@@ -52,6 +56,26 @@ final class Arc
         $this->exists = fn(string $name): bool => (
             self::validName($name) && is_file($this->path . '/components/' . str_replace('.', '/', $name) . '.arc.php')
         );
+        $this->props = function (string $name): ?array {
+            if (!self::validName($name)) {
+                return null;
+            }
+            $file = $this->path . '/components/' . str_replace('.', '/', $name) . '.arc.php';
+            $source = @file_get_contents($file);
+            if ($source === false) {
+                return null;
+            }
+            $declaration = Compiler::propsDeclaration($source);
+            return (
+                $declaration === null
+                    ? null
+                    : [
+                        'parameters' => $declaration['parameters'],
+                        'file' => $file,
+                        'line' => $declaration['line'],
+                    ]
+            );
+        };
     }
 
     /**
@@ -141,7 +165,7 @@ final class Arc
         }
         $compiled = $this->cache . '/' . $name . '.' . hash('xxh128', Compiler::VERSION . "\0" . $source) . '.php';
         if (!is_file($compiled)) {
-            $this->write($compiled, $this->compiler->compile($source, $file, $component, $this->exists));
+            $this->write($compiled, $this->compiler->compile($source, $file, $component, $this->exists, $this->props));
         }
         return $compiled;
     }
@@ -158,10 +182,15 @@ final class Arc
         }
         // Written aside and renamed into place, so another worker never includes half a file.
         $temporary = $file . '.' . bin2hex(random_bytes(6)) . '.tmp';
-        if (@file_put_contents($temporary, $code) !== strlen($code) || !@rename($temporary, $file)) {
+        if (@file_put_contents($temporary, $code) !== strlen($code)) {
             @unlink($temporary);
             throw new ArcException("Cannot write the compiled template {$file}.");
         }
+        if (!@rename($temporary, $file) && !is_file($file)) {
+            @unlink($temporary);
+            throw new ArcException("Cannot write the compiled template {$file}.");
+        }
+        @unlink($temporary);
     }
 
     /**
