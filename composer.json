@@ -1,0 +1,44 @@
+{
+    "name": "crabphp/arc",
+    "description": "Arc, the Crab template engine: components compiled once to plain PHP",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": "^8.4",
+        "crabphp/framework": "^0.6"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^13.4.4",
+        "carthage-software/mago": "1.57.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Crab\\Arc\\": "src/"
+        },
+        "files": [
+            "src/helpers.php"
+        ]
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Crab\\Arc\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "@php vendor/bin/phpunit",
+        "format": "@php vendor/bin/mago fmt",
+        "format:check": "@php vendor/bin/mago fmt --check",
+        "lint": "@php vendor/bin/mago lint"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../framework",
+            "options": {
+                "symlink": true
+            }
+        }
+    ],
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
