@@ -103,16 +103,18 @@ A component declares its props as PHP parameters with `@props`, and outputs what
 
 A layout is a component like any other: there is no `@extends` or `@section`. The page puts itself in its layout, and a named slot fills each place the layout leaves open.
 
-A prop the component does not declare, or a required one left out, is PHP's own error for a wrong named argument. A component that has no file is a compile error at the tag's line.
+A prop the component does not declare, or a required one left out, is a compile error at the tag's line. Arc reads the component's @props declaration while compiling the caller. A component that has no file is also a compile error at the tag's line. If a component throws while it is called, the error names the calling template and tag line.
 
 ## How it stays fast
 
 - **Compiled once.** A template compiles to a closure in `storage/arc`, under a name made from its content and Arc's version. A worker loads each one once and keeps it: rendering is one call, with no file checks.
 - **One string.** The page is built by appending to a local string. Adjacent text and values become one append.
 - **Escaping inline.** `{{ }}` compiles to `htmlspecialchars()`, with no helper between.
-- **Components are calls.** A component is a closure, looked up once per render, and each use is one call with named arguments. Slots are rendered to strings before the call.
+- **Components are calls.** A component is a closure, looked up once per render, and each use is one call. When its @props declaration makes it safe, Arc emits positional arguments; otherwise it uses named arguments. Slots are rendered to strings before the call.
 
 Render a page of 50 product cards in a layout, with the JIT off, and Arc takes about as long as the same page written as a raw PHP template with `ob_start()` and `include`.
+
+The reproducible numbers and benchmark script are in [BENCHMARKS.md](BENCHMARKS.md).
 
 ## Deploying and developing
 
