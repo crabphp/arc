@@ -23,7 +23,9 @@ final class ArcTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->directory = sys_get_temp_dir() . '/arc-test-' . bin2hex(random_bytes(6));
+        // The real path: on macOS the temporary folder is a symlink, and a worker started in a
+        // child process names its templates by the resolved path, which is part of a cache key.
+        $this->directory = (string) realpath(sys_get_temp_dir()) . '/arc-test-' . bin2hex(random_bytes(6));
         mkdir($this->directory . '/views/components', 0o777, true);
     }
 
