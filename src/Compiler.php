@@ -21,7 +21,7 @@ final class Compiler
     /**
      * Part of every compiled file's name: a new compiler compiles again.
      */
-    public const string VERSION = '10';
+    public const string VERSION = '11';
 
     private const string MARKS = '/\{\{--|@\{\{|@@|\{!!|\{\{|<\?php|<\?=|<\/?[A-Z][A-Za-z0-9]*(?:\.[A-Z][A-Za-z0-9]*)*|@[a-z]+/';
 
@@ -466,34 +466,19 @@ final class Compiler
         if (($this->source[$start] ?? '') !== '(') {
             throw $this->error($at, "@{$name} needs its arguments in parentheses");
         }
-        $depth = 0;
-        $quote = null;
-        for ($i = $start; $i < strlen($this->source); $i++) {
-            $char = $this->source[$i];
-            if ($quote !== null) {
-                if ($char === '\\') {
-                    $i++;
-                } elseif ($char === $quote) {
-                    $quote = null;
-                }
-                continue;
-            }
-            if ($char === '\'' || $char === '"') {
-                $quote = $char;
-            } elseif ($char === '(') {
-                $depth++;
-            } elseif ($char === ')' && --$depth === 0) {
-                $this->position = $i + 1;
-                $inner = substr($this->source, $start + 1, $i - $start - 1);
-                $this->argumentsLine = $this->line($start + 1 + strspn($inner, " \t\r\n"));
-                $arguments = trim($inner);
-                if ($arguments === '') {
-                    throw $this->error($at, "@{$name} has empty parentheses");
-                }
-                return $arguments;
-            }
+        $end = self::phpEnd($this->source, $start + 1, ')');
+        if ($end === false) {
+            throw $this->error($at, "The parentheses of @{$name} are not closed");
         }
-        throw $this->error($at, "The parentheses of @{$name} are not closed");
+        $this->position = $end + 1;
+        $inner = substr($this->source, $start + 1, $end - $start - 1);
+        $this->argumentsLine = $this->line($start + 1 + strspn($inner, " \t\r\n"));
+        // Keep trailing newlines: one may terminate a // or # comment.
+        $arguments = rtrim(ltrim($inner), " \t\r");
+        if (trim($arguments) === '') {
+            throw $this->error($at, "@{$name} has empty parentheses");
+        }
+        return $arguments;
     }
 
     private function open(string $kind, int $at, string $statement): void
@@ -881,42 +866,53 @@ final class Compiler
     private static function parameterParts(string $parameters, string $file, int $line): array
     {
         $parts = [];
-        $start = 0;
-        $depth = 0;
-        $quote = null;
-        $length = strlen($parameters);
-        for ($index = 0; $index < $length; ++$index) {
-            $char = $parameters[$index];
-            if ($quote !== null) {
-                if ($char === '\\') {
-                    ++$index;
-                } elseif ($char === $quote) {
-                    $quote = null;
+        $part = '';
+        $stack = [];
+        foreach (token_get_all('<?php ' . $parameters) as $lexeme) {
+            if (is_array($lexeme)) {
+                [$kind, $text] = $lexeme;
+                if ($kind === T_OPEN_TAG) {
+                    continue;
                 }
+                if ($kind === T_COMMENT || $kind === T_DOC_COMMENT) {
+                    $part .= ' ' . str_repeat("\n", substr_count($text, "\n"));
+                    continue;
+                }
+                if ($kind === T_START_HEREDOC) {
+                    $stack[] = T_END_HEREDOC;
+                } elseif ($kind === T_END_HEREDOC) {
+                    array_pop($stack);
+                } elseif ($kind === T_CURLY_OPEN || $kind === T_DOLLAR_OPEN_CURLY_BRACES) {
+                    $stack[] = '}';
+                } elseif ($kind === T_ATTRIBUTE) {
+                    $stack[] = ']';
+                }
+                $part .= $text;
                 continue;
             }
-            if ($char === '\'' || $char === '"') {
-                $quote = $char;
-            } elseif (in_array($char, ['(', '[', '{'], true)) {
-                ++$depth;
-            } elseif (in_array($char, [')', ']', '}'], true)) {
-                --$depth;
-                if ($depth < 0) {
-                    throw ArcException::at($file, $line, 'The @props parameters have unbalanced brackets.');
-                }
-            } elseif ($char === ',' && $depth === 0) {
-                $part = trim(substr($parameters, $start, $index - $start));
-                if ($part === '') {
+            if ($lexeme === ',' && $stack === []) {
+                if (trim($part) === '') {
                     throw ArcException::at($file, $line, 'The @props parameters contain an empty item.');
                 }
-                $parts[] = $part;
-                $start = $index + 1;
+                $parts[] = trim($part);
+                $part = '';
+                continue;
             }
+            if ($lexeme === end($stack)) {
+                array_pop($stack);
+            } elseif ($lexeme === '"' || $lexeme === '`') {
+                $stack[] = $lexeme;
+            } elseif (isset(['(' => ')', '[' => ']', '{' => '}'][$lexeme])) {
+                $stack[] = ['(' => ')', '[' => ']', '{' => '}'][$lexeme];
+            } elseif (in_array($lexeme, [')', ']', '}'], true)) {
+                throw ArcException::at($file, $line, 'The @props parameters have unbalanced brackets.');
+            }
+            $part .= $lexeme;
         }
-        if ($quote !== null || $depth !== 0) {
+        if ($stack !== []) {
             throw ArcException::at($file, $line, 'The @props parameters are not closed.');
         }
-        $part = trim(substr($parameters, $start));
+        $part = trim($part);
         if ($part === '') {
             throw ArcException::at($file, $line, 'The @props parameters contain an empty item.');
         }

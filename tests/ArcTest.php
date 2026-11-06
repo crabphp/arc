@@ -108,6 +108,49 @@ final class ArcTest extends TestCase
         self::assertSame($expected, $this->arc()->render('page', ['value' => 'A']));
     }
 
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function directiveCommentCases(): iterable
+    {
+        yield 'block comment' => ['@if(true /* ) */)OK@endif', 'OK'];
+        yield 'line comment' => ["@if(true // ) [\n)OK@endif", 'OK'];
+        yield 'hash comment' => ["@unless(false # ) ]\n)OK@endunless", 'OK'];
+        yield 'elseif' => ['@if(false)no@elseif(true /* ) */)OK@endif', 'OK'];
+        yield 'foreach' => ['@foreach([1, 2] /* ) [, */ as $item){{ $item }}@endforeach', '12'];
+        yield 'for' => ['@for($i = 0; $i < 2 /* ) } */; $i++){{ $i }}@endfor', '01'];
+        yield 'while' => ['<?php $i = 0; ?>@while($i++ < 2 /* ) */){{ $i }}@endwhile', '12'];
+        yield 'nowdoc' => ["@if(<<<'TEXT'\n)\nTEXT\n)OK@endif", 'OK'];
+    }
+
+    #[DataProvider('directiveCommentCases')]
+    public function testDirectiveArgumentsUsePhpLexicalDelimiters(string $source, string $expected): void
+    {
+        $this->view('page', $source);
+        self::assertSame($expected, $this->arc()->render('page'));
+    }
+
+    public function testPropParametersIgnoreCommentsWhenSplittingAndReadingNames(): void
+    {
+        $this->component('card', <<<'ARC'
+            @props(
+                /* $old), [ */ string /* $fake */ $title /* $name */ = 'Correct',
+                array $values = [1, 2 /* ), } ] */],
+                string $text = '/* $slot ), */' // ), [ $wrong
+            )
+            {{ $title }}:{{ count($values) }}:{{ $text }}:{!! $slot !!}
+            ARC);
+        $this->view('page', '<Card>Body</Card><Card title="Custom" />');
+        self::assertSame('Correct:2:/* $slot ), */:BodyCustom:2:/* $slot ), */:', $this->arc()->render('page'));
+    }
+
+    public function testDirectiveCommentsPreserveErrorSourceLines(): void
+    {
+        $this->view('page', "<p>\n@if(\ntrue /* ) */ &&\n\$missing +\n)bad@endif");
+        $this->expectExceptionMessage('page.arc.php on line 5');
+        $this->arc()->compileAll();
+    }
+
     public function testComponentsTakePropsAndSlots(): void
     {
         $this->component(
