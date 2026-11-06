@@ -21,7 +21,7 @@ final class Compiler
     /**
      * Part of every compiled file's name: a new compiler compiles again.
      */
-    public const string VERSION = '7';
+    public const string VERSION = '8';
 
     private const array WITH_ARGUMENTS = ['if', 'elseif', 'unless', 'foreach', 'for', 'while', 'props'];
     private const array WITHOUT_ARGUMENTS = [
@@ -185,25 +185,69 @@ final class Compiler
     }
 
     /**
-     * Parses generated PHP without running the template or any of its statements.
+     * Compiles generated PHP without executing it. PHP compile fatals cannot be
+     * caught in-process, so lint in a separate CLI process before publishing or loading.
      */
     public static function validate(string $code, string $file): void
     {
         try {
             token_get_all($code, TOKEN_PARSE);
         } catch (\ParseError $error) {
-            $line = 1;
-            if (preg_match('/^\/\* Arc source lines: (.+) \*\/$/m', $code, $match)) {
-                $lines = json_decode($match[1], true, flags: JSON_THROW_ON_ERROR);
-                foreach ($lines as $generated => $original) {
-                    if ($generated > $error->getLine()) {
-                        break;
-                    }
-                    $line = $original;
-                }
-            }
-            throw ArcException::runtime($file, $line, $error);
+            throw ArcException::runtime($file, self::sourceLine($code, $error->getLine()), $error);
         }
+        if (!function_exists('proc_open')) {
+            throw ArcException::at($file, 1, 'PHP compilation validation requires proc_open and the PHP CLI');
+        }
+        $input = @tmpfile();
+        if ($input === false) {
+            throw ArcException::at($file, 1, 'Cannot create a temporary stream for PHP compilation validation');
+        }
+        try {
+            if (fwrite($input, $code) !== strlen($code) || !rewind($input)) {
+                throw ArcException::at($file, 1, 'Cannot write the PHP compilation validation input');
+            }
+            // Use a file for stdin and one combined output pipe: neither a large
+            // template nor a compiler diagnostic can deadlock two full pipes.
+            $process = @proc_open(
+                [PHP_BINARY, '-n', '-d', 'display_errors=stderr', '-d', 'log_errors=0', '-l'],
+                [0 => $input, 1 => ['pipe', 'w'], 2 => ['redirect', 1]],
+                $pipes,
+            );
+            if ($process === false) {
+                throw ArcException::at($file, 1, 'Cannot start the PHP CLI for compilation validation');
+            }
+            $output = stream_get_contents($pipes[1]);
+            fclose($pipes[1]);
+            $status = proc_close($process);
+        } finally {
+            fclose($input);
+        }
+        if ($status === 0) {
+            return;
+        }
+        if (preg_match(
+            '/^(?:PHP )?(?:Fatal|Parse) error:\s*(.*?) in Standard input code on line (\d+)$/ms',
+            (string) $output,
+            $match,
+        )) {
+            throw ArcException::at($file, self::sourceLine($code, (int) $match[2]), $match[1]);
+        }
+        throw ArcException::at($file, 1, 'PHP compilation validation failed: ' . trim((string) $output));
+    }
+
+    private static function sourceLine(string $code, int $generatedLine): int
+    {
+        $line = 1;
+        if (preg_match('/^\/\* Arc source lines: (.+) \*\/$/m', $code, $match)) {
+            $lines = json_decode($match[1], true, flags: JSON_THROW_ON_ERROR);
+            foreach ($lines as $generated => $original) {
+                if ($generated > $generatedLine) {
+                    break;
+                }
+                $line = $original;
+            }
+        }
+        return $line;
     }
 
     private function emit(string $code, int $line, bool $multiline = false): void

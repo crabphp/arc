@@ -166,7 +166,7 @@ The reproducible numbers and benchmark script are in [BENCHMARKS.md](BENCHMARKS.
 
 ## Deploying and developing
 
-Compile every template when deploying, then restart workers to load the new templates. Compilation parses the generated PHP without executing the template; a syntax error fails the command with the template path and source line. `arc:cache` also parses existing cached artifacts. This checks syntax and component declarations; it cannot detect every runtime error or missing data value.
+Compile every template when deploying, then restart workers to load the new templates. Compilation validates generated PHP with an isolated `php -l` process, without executing template code. Syntax errors and PHP compile-time fatal errors fail the command with the template path and source line. This requires `proc_open`, a writable temporary directory, and a PHP CLI executable at `PHP_BINARY`; validation fails closed if it cannot run. `arc:cache` and a worker's first load also validate existing artifacts. Loaded closures need no further validation on warm renders. The check cannot detect every runtime error or missing data value.
 
 ```sh
 php cua arc:cache

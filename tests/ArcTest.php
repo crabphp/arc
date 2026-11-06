@@ -448,6 +448,124 @@ final class ArcTest extends TestCase
         $this->arc()->compileAll();
     }
 
+    /**
+     * @return iterable<string, array{string, string, string, int}>
+     */
+    public static function compileFatalCases(): iterable
+    {
+        yield 'typed default' => [
+            "\n@props(int \$count = 1){{ \$count }}",
+            'int $count = 1',
+            'int $count = \'many\'',
+            2,
+        ];
+        yield 'void parameter' => [
+            "\n@props(mixed \$value = null)Test",
+            'mixed $value',
+            'void $value',
+            2,
+        ];
+        yield 'break outside loop' => ["<?php\n\$value = 1;\n?>Test", '$value = 1;', 'break;', 2];
+        yield 'continue outside loop' => ["<?php\n\$value = 1;\n?>Test", '$value = 1;', 'continue;', 2];
+    }
+
+    #[DataProvider('compileFatalCases')]
+    public function testCompilationRejectsPhpCompileFatals(string $valid, string $from, string $to, int $line): void
+    {
+        $this->expectException(ArcException::class);
+        $this->expectExceptionMessage('broken.arc.php on line ' . $line);
+        new Compiler()->compile(str_replace($from, $to, $valid), 'broken.arc.php', true, static fn(): bool => false);
+    }
+
+    #[DataProvider('compileFatalCases')]
+    public function testCacheCommandRejectsPhpCompileFatals(string $valid, string $from, string $to, int $line): void
+    {
+        $this->component('card', str_replace($from, $to, $valid));
+        $this->view('page', '<Card />');
+        $app = new App(new Config([
+            'app' => ['path' => $this->directory, 'storage' => $this->directory . '/storage'],
+            'arc' => ['path' => $this->directory . '/views', 'cache' => $this->directory . '/cache'],
+        ]));
+        $app->register(ArcPlugin::class);
+        $output = $this->createMock(Output::class);
+        $output
+            ->expects(self::once())
+            ->method('error')
+            ->with(self::stringContains('card.arc.php on line ' . $line));
+        $output->expects(self::never())->method('line');
+        self::assertSame(1, $app->console->run(['arc:cache'], $output));
+        self::assertSame([], glob($this->directory . '/cache/*.php'));
+    }
+
+    #[DataProvider('compileFatalCases')]
+    public function testWorkersAndDeploymentRejectCachedCompileFatals(
+        string $valid,
+        string $from,
+        string $to,
+        int $line,
+    ): void {
+        $this->component('card', $valid);
+        $this->view('page', '<Card />');
+        self::assertSame(2, $this->arc()->compileAll());
+        $compiled = glob($this->directory . '/cache/components.card.*.php')[0];
+        file_put_contents($compiled, str_replace($from, $to, file_get_contents($compiled)));
+        $script = $this->directory . '/worker.php';
+        file_put_contents(
+            $script,
+            '<?php require ' . var_export(dirname(__DIR__) . '/vendor/autoload.php', true) . ';' . <<<'PHP'
+                $arc = new Crab\Arc\Arc(__DIR__ . '/views', __DIR__ . '/cache');
+                try {
+                    $argv[1] === 'render' ? $arc->render('page') : $arc->compileAll();
+                    echo 'ACCEPTED';
+                } catch (Crab\Arc\ArcException $error) {
+                    echo 'CAUGHT: ' . $error->getMessage();
+                }
+                PHP,
+        );
+        foreach (['render', 'compileAll'] as $operation) {
+            $process = proc_open([PHP_BINARY, $script, $operation], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes);
+            $output = stream_get_contents($pipes[1]);
+            fclose($pipes[1]);
+            self::assertSame(0, proc_close($process), $output);
+            self::assertStringStartsWith('CAUGHT: ', $output);
+            self::assertStringContainsString('card.arc.php on line ' . $line, $output);
+        }
+    }
+
+    public function testValidationDoesNotExecutePhpEvenOutsideTheClosure(): void
+    {
+        $marker = $this->directory . '/executed';
+        Compiler::validate('<?php file_put_contents(' . var_export($marker, true) . ', "executed");', 'safe.arc.php');
+        self::assertFileDoesNotExist($marker);
+    }
+
+    public function testWorkersRefuseCachedArtifactsWhenTheValidatorCannotRun(): void
+    {
+        $this->view('page', 'Hello');
+        self::assertSame(1, $this->arc()->compileAll());
+        $script = $this->directory . '/worker.php';
+        file_put_contents(
+            $script,
+            '<?php require ' . var_export(dirname(__DIR__) . '/vendor/autoload.php', true) . ';' . <<<'PHP'
+                try {
+                    echo new Crab\Arc\Arc(__DIR__ . '/views', __DIR__ . '/cache')->render('page');
+                } catch (Crab\Arc\ArcException $error) {
+                    echo $error->getMessage();
+                }
+                PHP,
+        );
+        $process = proc_open(
+            [PHP_BINARY, '-d', 'disable_functions=proc_open', $script],
+            [1 => ['pipe', 'w'], 2 => ['redirect', 1]],
+            $pipes,
+        );
+        $output = stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+        self::assertSame(0, proc_close($process), $output);
+        self::assertStringContainsString('requires proc_open and the PHP CLI', $output);
+        self::assertStringNotContainsString('Hello', $output);
+    }
+
     public function testNamesAreCheckedAndMissingTemplatesNamed(): void
     {
         foreach (['../secret', 'Orders.Index', 'a..b', ''] as $name) {

@@ -117,7 +117,7 @@ final class Arc
     {
         $count = 0;
         foreach ($this->templates() as $name) {
-            $this->compiled($name, str_starts_with($name, 'components.'), true);
+            $this->compiled($name, str_starts_with($name, 'components.'));
             $count++;
         }
         return $count;
@@ -152,7 +152,7 @@ final class Arc
     /**
      * The compiled file of a template, compiled first when there is none for its content.
      */
-    private function compiled(string $name, bool $component, bool $validate = false): string
+    private function compiled(string $name, bool $component): string
     {
         if (!self::validName($name)) {
             throw new ArcException(
@@ -193,7 +193,9 @@ final class Arc
         if (!is_file($compiled)) {
             $code ??= $this->compiler->compile($source, $file, $component, $this->exists, $this->props);
             $this->write($compiled, $code);
-        } elseif ($validate) {
+        } else {
+            // A fresh worker must validate existing artifacts before require too.
+            // Loaded closures bypass this path on every subsequent render.
             $cached = @file_get_contents($compiled);
             if ($cached === false) {
                 throw new ArcException("Cannot read the compiled template {$compiled}.");
