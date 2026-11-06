@@ -11,6 +11,9 @@ use Crab\Arc\ArcPlugin;
 use Crab\Arc\Compiler;
 use Crab\Config\Config;
 use Crab\Contracts\Console\Output;
+use Crab\Contracts\Database\Database;
+use Crab\Contracts\Database\Query;
+use Crab\Http\Request;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -474,9 +477,103 @@ final class ArcTest extends TestCase
         self::assertNotSame([], glob($app->config->get('app.storage') . '/arc/*.php'), 'Compiled into storage/arc.');
     }
 
+    public function testReadmeActionRegistersAndRendersWithConstructorServices(): void
+    {
+        $this->view('catalogue', '@foreach($products as $product){{ $product[\'name\'] }}@endforeach');
+        $app = new App(new Config(['app' => ['path' => $this->directory, 'storage' => $this->directory . '/storage']]));
+        $app->container->instance(Arc::class, $this->arc());
+        $query = $this->createStub(Query::class);
+        $query->method('get')->willReturn([['name' => '<Card>']]);
+        $database = $this->createMock(Database::class);
+        $database->expects(self::once())->method('table')->with('products')->willReturn($query);
+        $app->container->instance(Database::class, $database);
+        $example = $this->directory . '/readme.php';
+        file_put_contents(
+            $example,
+            "<?php\nnamespace ArcReadme;\n" . $this->readmeBlock('php', 'final class ShowCatalogue'),
+        );
+        require $example;
+        $app->router->get('/catalogue', \ArcReadme\ShowCatalogue::class);
+        $response = $app->router->handle(new Request('GET', '/catalogue'));
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('&lt;Card&gt;', (string) $response->getBody());
+
+        mkdir($this->directory . '/views/mail');
+        $this->view('mail.receipt', 'Order {{ $order[\'number\'] }}');
+        $receiptExample = $this->directory . '/receipt.php';
+        file_put_contents(
+            $receiptExample,
+            "<?php\nnamespace ArcReadme;\n" . $this->readmeBlock('php', 'final class ReceiptBody'),
+        );
+        require $receiptExample;
+        $body = $app->container->get(\ArcReadme\ReceiptBody::class);
+        self::assertSame('Order &lt;7&gt;', $body->render(['number' => '<7>']));
+    }
+
+    public function testReadmeUrlExamplesRejectUnsafeSchemesAndEscapeAttributes(): void
+    {
+        $prepare = $this->directory . '/prepare-url.php';
+        file_put_contents($prepare, "<?php\n" . $this->readmeBlock('php', 'filter_var'));
+        $safeUrl = static function (string $candidate) use ($prepare): string {
+            $url = '';
+            require $prepare;
+            return $url;
+        };
+        $this->view('link', trim($this->readmeBlock('html', '<a href="{{ $url }}"')));
+        $arc = $this->arc();
+        foreach ([
+            'javascript:alert(1)',
+            'data:text/html,<script>alert(1)</script>',
+            '//evil.example',
+            "java\nscript:alert(1)",
+        ] as $candidate) {
+            self::assertSame('<a href="/">Website</a>', $arc->render('link', ['url' => $safeUrl($candidate)]));
+        }
+        self::assertSame('<a href="https://example.com/?a=1&amp;b=2">Website</a>', $arc->render('link', [
+            'url' => $safeUrl('https://example.com/?a=1&b=2'),
+        ]));
+        $this->view('local', trim($this->readmeBlock('html', '<a href="/products/')));
+        self::assertSame('<a href="/products/%2F%2Fevil.example%2F%22%3F%26">View product</a>', $arc->render('local', [
+            'slug' => '//evil.example/"?&',
+        ]));
+    }
+
+    public function testBenchmarkCommandsAreExecutableFencedShellExamples(): void
+    {
+        $markdown = file_get_contents(dirname(__DIR__) . '/BENCHMARKS.md');
+        preg_match_all('/^```sh\n(.*?)^```/ms', $markdown, $matches);
+        self::assertCount(2, $matches[1]);
+        foreach ($matches[1] as $command) {
+            self::assertStringContainsString('-d opcache.jit=0', $command);
+            $arguments = preg_split('/\s+/', trim(str_replace('30000', '1', $command)));
+            $arguments[0] = PHP_BINARY;
+            array_splice($arguments, 1, 0, ['-d', 'sys_temp_dir=' . $this->directory]);
+            $process = proc_open($arguments, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, dirname(__DIR__));
+            $output = stream_get_contents($pipes[1]);
+            $error = stream_get_contents($pipes[2]);
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            self::assertSame(0, proc_close($process), $error);
+            self::assertStringContainsString('Arc', $output);
+            self::assertStringContainsString('us/render', $output);
+        }
+    }
+
     private function arc(): Arc
     {
         return new Arc($this->directory . '/views', $this->directory . '/cache');
+    }
+
+    private function readmeBlock(string $language, string $contains): string
+    {
+        $markdown = file_get_contents(dirname(__DIR__) . '/README.md');
+        preg_match_all('/^```' . $language . '\n(.*?)^```/ms', $markdown, $matches);
+        foreach ($matches[1] as $code) {
+            if (str_contains($code, $contains)) {
+                return $code;
+            }
+        }
+        self::fail('No README example contains ' . $contains);
     }
 
     private function view(string $name, string $source): void

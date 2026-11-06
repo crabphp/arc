@@ -4,6 +4,13 @@ Crab Arc follows [semantic versioning](https://semver.org). Before 1.0, a minor 
 
 ## Unreleased
 
+- **Pre-publication fixes:** component edits invalidate cached callers in new
+  workers; compilation and `arc:cache` reject malformed generated PHP with
+  template source lines. Conditional named slots preserve defaults and reset
+  per call. Adjacent component failures report their own tag lines, and PHP
+  strings and comments can contain template delimiters. README examples cover
+  constructor injection and context-specific escaping; JIT-off benchmark
+  results distinguish CLI OPcache settings.
 - **Safer components:** caller templates now check component props and slots
   while compiling, loop control cannot cross a component boundary, and
   component failures name the template line. Component arguments use positional
