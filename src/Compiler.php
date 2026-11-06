@@ -21,7 +21,7 @@ final class Compiler
     /**
      * Part of every compiled file's name: a new compiler compiles again.
      */
-    public const string VERSION = '3';
+    public const string VERSION = '4';
 
     private const array WITH_ARGUMENTS = ['if', 'elseif', 'unless', 'foreach', 'for', 'while', 'props'];
     private const array WITHOUT_ARGUMENTS = [
@@ -40,11 +40,18 @@ final class Compiler
     private bool $component = false;
     private int $position = 0;
     private string $code = '';
+    private int $codeLine = 1;
+    /**
+     * @var array<int, int> Generated body lines mapped to template lines.
+     */
+    private array $lines = [];
+    private int $propsLine = 1;
+    private int $argumentsLine = 1;
     /**
      * Pending parts of the current append: [true, text, null] or
-     * [false, expression, component line or null].
+     * [false, expression, component line or null], followed by the source line.
      *
-     * @var list<array{bool, string, int|null}>
+     * @var list<array{bool, string, int|null, int}>
      */
     private array $parts = [];
     /**
@@ -54,9 +61,9 @@ final class Compiler
      */
     private array $outputs = [];
     /**
-     * Open @if, @foreach and the like: [kind, line].
+     * Open @if, @foreach and the like: [kind, line, has else].
      *
-     * @var list<array{string, int}>
+     * @var list<array{string, int, bool}>
      */
     private array $blocks = [];
     /**
@@ -115,6 +122,10 @@ final class Compiler
         $this->component = $component;
         $this->position = 0;
         $this->code = '';
+        $this->codeLine = 1;
+        $this->lines = [];
+        $this->propsLine = 1;
+        $this->argumentsLine = 1;
         $this->parts = [];
         $this->outputs = ['$__o'];
         $this->blocks = [];
@@ -150,7 +161,57 @@ final class Compiler
         } else {
             $head = "static function (\\Crab\\Arc\\Arc \$__arc, array \$__data): string {\n    \\extract(\$__data, \\EXTR_SKIP);\n";
         }
-        return "<?php\n\n/* Compiled by Arc from {$from}; do not edit. */\n\nreturn {$head}{$hoisted}    \$__o = '';\n{$this->code}    return \$__o;\n};\n";
+        $prefix = "<?php\n\n/* Compiled by Arc from {$from}; do not edit. */\n";
+        $lines = [];
+        $headLine = substr_count($prefix, "\n") + 3;
+        for ($i = 0; $i < substr_count($head, "\n"); $i++) {
+            $lines[$headLine + $i] = $this->propsLine + $i;
+        }
+        $bodyPrefix = "\n\nreturn {$head}{$hoisted}    \$__o = '';\n";
+        $offset = substr_count($prefix . $bodyPrefix, "\n");
+        foreach ($this->lines as $generated => $original) {
+            $lines[$offset + $generated] = $original;
+        }
+        $code =
+            $prefix
+            . '/* Arc source lines: '
+            . json_encode($lines, JSON_THROW_ON_ERROR)
+            . ' */'
+            . $bodyPrefix
+            . $this->code
+            . "    return \$__o;\n};\n";
+        self::validate($code, $file);
+        return $code;
+    }
+
+    /**
+     * Parses generated PHP without running the template or any of its statements.
+     */
+    public static function validate(string $code, string $file): void
+    {
+        try {
+            token_get_all($code, TOKEN_PARSE);
+        } catch (\ParseError $error) {
+            $line = 1;
+            if (preg_match('/^\/\* Arc source lines: (.+) \*\/$/m', $code, $match)) {
+                $lines = json_decode($match[1], true, flags: JSON_THROW_ON_ERROR);
+                foreach ($lines as $generated => $original) {
+                    if ($generated > $error->getLine()) {
+                        break;
+                    }
+                    $line = $original;
+                }
+            }
+            throw ArcException::runtime($file, $line, $error);
+        }
+    }
+
+    private function emit(string $code, int $line, bool $multiline = false): void
+    {
+        $this->code .= $code;
+        for ($i = 0; $i < substr_count($code, "\n"); $i++) {
+            $this->lines[$this->codeLine++] = $line + ($multiline ? $i : 0);
+        }
     }
 
     /**
@@ -268,7 +329,9 @@ final class Compiler
         if ($end === false) {
             throw $this->error($at, 'The value is not closed with ' . $close);
         }
-        $expression = trim(substr($this->source, $this->position, $end - $this->position));
+        $inner = substr($this->source, $this->position, $end - $this->position);
+        $line = $this->line($this->position + strspn($inner, " \t\r\n"));
+        $expression = trim($inner);
         $this->position = $end + strlen($close);
         if ($expression === '') {
             throw $this->error($at, 'The value is empty');
@@ -279,11 +342,13 @@ final class Compiler
                 ? "\\htmlspecialchars((string) ({$expression}), \\ENT_QUOTES | \\ENT_SUBSTITUTE)"
                 : "({$expression})",
             null,
+            $line,
         ];
     }
 
     private function php(int $at): void
     {
+        $start = $this->position;
         $end = strpos($this->source, '?>', $this->position);
         $inner = $end === false
             ? substr($this->source, $this->position)
@@ -293,7 +358,7 @@ final class Compiler
             throw $this->error($at, 'The <?php block is empty');
         }
         $this->flush();
-        $this->code .= '    ' . trim($inner) . "\n";
+        $this->emit('    ' . trim($inner) . "\n", $this->line($start + strspn($inner, " \t\r\n")), true);
     }
 
     private function directive(int $at, string $name): void
@@ -352,7 +417,9 @@ final class Compiler
                 $depth++;
             } elseif ($char === ')' && --$depth === 0) {
                 $this->position = $i + 1;
-                $arguments = trim(substr($this->source, $start + 1, $i - $start - 1));
+                $inner = substr($this->source, $start + 1, $i - $start - 1);
+                $this->argumentsLine = $this->line($start + 1 + strspn($inner, " \t\r\n"));
+                $arguments = trim($inner);
                 if ($arguments === '') {
                     throw $this->error($at, "@{$name} has empty parentheses");
                 }
@@ -364,8 +431,8 @@ final class Compiler
 
     private function open(string $kind, int $at, string $statement): void
     {
-        $this->blocks[] = [$kind, $this->line($at)];
-        $this->code .= "    {$statement}\n";
+        $this->blocks[] = [$kind, $this->line($at), false];
+        $this->emit("    {$statement}\n", $this->argumentsLine, true);
     }
 
     private function continueIf(int $at, string $name, string $statement): void
@@ -375,7 +442,11 @@ final class Compiler
         if ($top === false || !in_array($top[0], $allowed, true) || $this->blockOutsideTag()) {
             throw $this->error($at, "@{$name} is not inside an @if");
         }
-        $this->code .= "    {$statement}\n";
+        if ($top[2]) {
+            throw $this->error($at, "@{$name} cannot follow @else");
+        }
+        $this->blocks[array_key_last($this->blocks)][2] = $name === 'else';
+        $this->emit("    {$statement}\n", $name === 'else' ? $this->line($at) : $this->argumentsLine, true);
     }
 
     private function close(int $at, string $kind): void
@@ -385,7 +456,7 @@ final class Compiler
             throw $this->error($at, "@end{$kind} has no open @{$kind}");
         }
         array_pop($this->blocks);
-        $this->code .= "    }\n";
+        $this->emit("    }\n", $this->line($at));
     }
 
     private function loopStatement(int $at, string $name): void
@@ -399,7 +470,7 @@ final class Compiler
             if (!in_array($kind, ['foreach', 'for', 'while'], true)) {
                 continue;
             }
-            $this->code .= "    {$name};\n";
+            $this->emit("    {$name};\n", $this->line($at));
             return;
         }
         throw $this->error($at, "@{$name} is not inside a loop");
@@ -431,6 +502,7 @@ final class Compiler
         }
         $this->definitions['slot'] ??= ['required' => false, 'variadic' => false];
         $this->props = $parameters;
+        $this->propsLine = $this->argumentsLine;
     }
 
     private function openTag(int $at, string $name): void
@@ -453,7 +525,7 @@ final class Compiler
             }
             $this->flush();
             $output = $this->variable('s');
-            $this->code .= "    {$output} = '';\n";
+            $this->emit("    {$output} = '';\n", $this->line($at));
             $this->tags[] = [
                 'kind' => 'slot',
                 'name' => $named[1],
@@ -484,12 +556,17 @@ final class Compiler
         }
         $this->components[$file] ??= $this->variable('c');
         if ($selfClosing) {
-            $this->parts[] = [false, $this->call($name, $attributes, [], $this->line($at)), $this->line($at)];
+            $this->parts[] = [
+                false,
+                $this->call($name, $attributes, [], $this->line($at)),
+                $this->line($at),
+                $this->line($at),
+            ];
             return;
         }
         $this->flush();
         $output = $this->variable('s');
-        $this->code .= "    {$output} = '';\n";
+        $this->emit("    {$output} = '';\n", $this->line($at));
         $this->tags[] = [
             'kind' => 'component',
             'name' => $name,
@@ -533,7 +610,7 @@ final class Compiler
         }
         $slots = $tag['slots'];
         $slots['slot'] = $tag['output'];
-        $this->parts[] = [false, $this->call($name, $tag['props'], $slots, $tag['line']), $tag['line']];
+        $this->parts[] = [false, $this->call($name, $tag['props'], $slots, $tag['line']), $tag['line'], $tag['line']];
     }
 
     /**
@@ -891,7 +968,7 @@ final class Compiler
             $this->parts[$last][1] .= $text;
             return;
         }
-        $this->parts[] = [true, $text, null];
+        $this->parts[] = [true, $text, null, $this->line($this->position)];
     }
 
     /**
@@ -902,24 +979,29 @@ final class Compiler
         if ($this->parts === []) {
             return;
         }
-        $expressions = [];
         $line = null;
-        foreach ($this->parts as [$literal, $part, $componentLine]) {
-            $expressions[] = $literal ? self::literal($part) : $part;
+        foreach ($this->parts as [, , $componentLine]) {
             $line ??= $componentLine;
         }
-        $this->parts = [];
-        $statement = end($this->outputs) . ' .= ' . implode(' . ', $expressions) . ';';
-        if ($line === null) {
-            $this->code .= "    {$statement}\n";
-            return;
+        if ($line !== null) {
+            $this->emit("    try {\n", $line);
         }
-        $file = self::literal($this->file);
-        $this->code .=
-            "    try {\n        {$statement}\n"
-            . "    } catch (\\Throwable \$__error) {\n"
-            . "        throw \\Crab\\Arc\\ArcException::runtime({$file}, {$line}, \$__error);\n"
-            . "    }\n";
+        $this->emit('    ' . end($this->outputs) . " .=\n", $this->parts[0][3]);
+        $last = array_key_last($this->parts);
+        foreach ($this->parts as $index => [$literal, $part, , $sourceLine]) {
+            $expression = $literal ? self::literal($part) : $part;
+            $this->emit('        ' . $expression . ($index === $last ? ';' : ' .') . "\n", $sourceLine, true);
+        }
+        $this->parts = [];
+        if ($line !== null) {
+            $file = self::literal($this->file);
+            $this->emit(
+                "    } catch (\\Throwable \$__error) {\n"
+                . "        throw \\Crab\\Arc\\ArcException::runtime({$file}, {$line}, \$__error);\n"
+                . "    }\n",
+                $line,
+            );
+        }
     }
 
     private function variable(string $kind): string

@@ -8,6 +8,9 @@ use Crab\App;
 use Crab\Arc\Arc;
 use Crab\Arc\ArcException;
 use Crab\Arc\ArcPlugin;
+use Crab\Arc\Compiler;
+use Crab\Config\Config;
+use Crab\Contracts\Console\Output;
 use PHPUnit\Framework\TestCase;
 
 final class ArcTest extends TestCase
@@ -287,6 +290,69 @@ final class ArcTest extends TestCase
         rename($this->directory . '/views', $this->directory . '/hidden-views');
         rename($this->directory . '/cache', $this->directory . '/hidden-cache');
         self::assertSame('second', $arc->render('page', ['title' => 'second']));
+    }
+
+    public function testCompilationRejectsInvalidPhpAtItsTemplateLine(): void
+    {
+        foreach ([
+            ["<p>\n{{ \$x + }}\n</p>",          false, 2],
+            ["{{ 1 }}\n{{ 2 }}\n{!! \$x + !!}", false, 3],
+            ["<?php\n\$x = 1;\n\$y = ;\n?>",    false, 3],
+            ["\n@if(\$x +)yes@endif",           false, 2],
+            ["\n@props(string \$x = )",         true,  2],
+            ["{{\n\$x + }}",                    false, 2],
+            ["@if(\n\$x +)yes@endif",           false, 2],
+            ["@props(\nstring \$x = )",         true,  2],
+        ] as [$source, $component, $line]) {
+            try {
+                new Compiler()->compile($source, 'broken.arc.php', $component, static fn(): bool => false);
+                self::fail('Invalid PHP was compiled: ' . $source);
+            } catch (ArcException $error) {
+                self::assertStringContainsString('broken.arc.php on line ' . $line . '.', $error->getMessage());
+                self::assertInstanceOf(\ParseError::class, $error->getPrevious());
+            }
+        }
+    }
+
+    public function testBranchesCannotFollowElse(): void
+    {
+        foreach (['@else', '@elseif(false)'] as $branch) {
+            $this->view('broken', "@if(true)a@else b\n{$branch} c@endif");
+            try {
+                $this->arc()->compileAll();
+                self::fail('A branch following @else compiled.');
+            } catch (ArcException $error) {
+                self::assertStringContainsString('cannot follow @else', $error->getMessage());
+                self::assertStringContainsString('broken.arc.php on line 2', $error->getMessage());
+            }
+        }
+    }
+
+    public function testCacheCommandFailsForInvalidPhp(): void
+    {
+        $this->view('broken', "<p>\n{{ \$x + }}\n</p>");
+        $app = new App(new Config([
+            'app' => ['path' => $this->directory, 'storage' => $this->directory . '/storage'],
+            'arc' => ['path' => $this->directory . '/views', 'cache' => $this->directory . '/cache'],
+        ]));
+        $app->register(ArcPlugin::class);
+        $output = $this->createMock(Output::class);
+        $output->expects(self::once())->method('error')->with(self::stringContains('broken.arc.php on line 2'));
+        $output->expects(self::never())->method('line');
+        self::assertSame(1, $app->console->run(['arc:cache'], $output));
+        self::assertSame([], glob($this->directory . '/cache/*.php'));
+    }
+
+    public function testCompileAllChecksExistingArtifactsWithoutExecutingTemplates(): void
+    {
+        $this->view('page', "<?php throw new \\RuntimeException('Do not run'); ?>\n{{ \$value }}");
+        self::assertSame(1, $this->arc()->compileAll());
+        $compiled = glob($this->directory . '/cache/*.php')[0];
+        $code = file_get_contents($compiled);
+        file_put_contents($compiled, str_replace('($value)', '($value +)', $code));
+        $this->expectException(ArcException::class);
+        $this->expectExceptionMessage('page.arc.php on line 2');
+        $this->arc()->compileAll();
     }
 
     public function testNamesAreCheckedAndMissingTemplatesNamed(): void

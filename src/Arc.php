@@ -117,7 +117,7 @@ final class Arc
     {
         $count = 0;
         foreach ($this->templates() as $name) {
-            $this->compiled($name, str_starts_with($name, 'components.'));
+            $this->compiled($name, str_starts_with($name, 'components.'), true);
             $count++;
         }
         return $count;
@@ -152,7 +152,7 @@ final class Arc
     /**
      * The compiled file of a template, compiled first when there is none for its content.
      */
-    private function compiled(string $name, bool $component): string
+    private function compiled(string $name, bool $component, bool $validate = false): string
     {
         if (!self::validName($name)) {
             throw new ArcException(
@@ -193,6 +193,12 @@ final class Arc
         if (!is_file($compiled)) {
             $code ??= $this->compiler->compile($source, $file, $component, $this->exists, $this->props);
             $this->write($compiled, $code);
+        } elseif ($validate) {
+            $cached = @file_get_contents($compiled);
+            if ($cached === false) {
+                throw new ArcException("Cannot read the compiled template {$compiled}.");
+            }
+            Compiler::validate($cached, $file);
         }
         if ($code !== null) {
             $this->write($index, json_encode($dependencies, JSON_THROW_ON_ERROR));
