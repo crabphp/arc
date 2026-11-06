@@ -2,6 +2,10 @@
 
 Crab Arc follows [semantic versioning](https://semver.org). Before 1.0, a minor version may break what an application writes; the entry says what to change.
 
+## 0.1.1 — 2026-11-06
+
+- **Compiled templates are linted from a file of their own:** the check that refuses a compiled template with a PHP compile error ran `php -l` on a temporary stream as standard input, which is not read the same way on every platform. It now names a temporary file, as it does on Linux and macOS alike.
+
 ## 0.1.0 — 2026-11-06
 
 - **Second review fixes:** compilation and first load validate generated PHP in
