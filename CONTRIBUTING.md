@@ -11,4 +11,4 @@ composer lint
 composer test
 ```
 
-CI runs the suite on Linux and macOS against framework `v0.6.1` and `main`.
+CI runs the suite on Linux and macOS against framework `v0.6.2` and `main`.

@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        framework: [v0.6.1, main]
+        framework: [v0.6.2, main]
     defaults:
       run:
         working-directory: arc

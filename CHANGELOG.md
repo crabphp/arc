@@ -2,7 +2,7 @@
 
 Crab Arc follows [semantic versioning](https://semver.org). Before 1.0, a minor version may break what an application writes; the entry says what to change.
 
-## Unreleased
+## 0.1.0 — 2026-11-06
 
 - **Second review fixes:** compilation and first load validate generated PHP in
   an isolated CLI process, catching compile-time fatal errors without executing
