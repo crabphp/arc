@@ -241,6 +241,54 @@ final class ArcTest extends TestCase
         self::assertCount(3, glob($this->directory . '/cache/*.php'));
     }
 
+    public function testCachedCallersFollowComponentPropOrderAfterAnEdit(): void
+    {
+        $body = '<h1>{{ $title }}</h1><p>{{ $subtitle }}</p>';
+        $this->component('card', '@props(string $title, string $subtitle)' . $body);
+        $this->component('wrapper', '<Card title="Title" subtitle="Subtitle" />');
+        $this->view('page', '<Wrapper />');
+        $expected = '<h1>Title</h1><p>Subtitle</p>';
+        self::assertSame($expected, $this->arc()->render('page'));
+
+        $this->component('card', '@props(string $subtitle, string $title)' . $body);
+        $fresh = $this->arc();
+        self::assertSame(3, $fresh->compileAll());
+        self::assertSame($expected, $fresh->render('page'));
+        self::assertSame($expected, $this->arc()->render('page'));
+    }
+
+    public function testCachedCallersRevalidateRemovedAndRequiredProps(): void
+    {
+        $this->component('card', '@props(string $title){{ $title }}');
+        $this->view('page', "\n<Card title=\"Title\" />");
+        self::assertSame("\nTitle", $this->arc()->render('page'));
+
+        foreach ([
+            '@props(string $subtitle)' => 'has no prop $title',
+            '@props(string $title, string $subtitle)' => 'needs the prop $subtitle',
+        ] as $declaration => $message) {
+            $this->component('card', $declaration);
+            try {
+                $this->arc()->compileAll();
+                self::fail('The cached caller accepted an incompatible declaration.');
+            } catch (ArcException $error) {
+                self::assertStringContainsString($message, $error->getMessage());
+                self::assertStringContainsString('page.arc.php on line 2', $error->getMessage());
+            }
+        }
+    }
+
+    public function testWarmRenderingKeepsLoadedClosuresWithoutReadingFiles(): void
+    {
+        $this->component('card', '@props(string $title){{ $title }}');
+        $this->view('page', '<Card :title="$title" />');
+        $arc = $this->arc();
+        self::assertSame('first', $arc->render('page', ['title' => 'first']));
+        rename($this->directory . '/views', $this->directory . '/hidden-views');
+        rename($this->directory . '/cache', $this->directory . '/hidden-cache');
+        self::assertSame('second', $arc->render('page', ['title' => 'second']));
+    }
+
     public function testNamesAreCheckedAndMissingTemplatesNamed(): void
     {
         foreach (['../secret', 'Orders.Index', 'a..b', ''] as $name) {

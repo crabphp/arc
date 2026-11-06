@@ -13,8 +13,8 @@ use Crab\Http\Response;
  * and <Forms.TextField> components/forms/text-field.arc.php.
  *
  * Each template is compiled once into the cache folder, under a name made
- * from its content and the compiler's version, so an edited template or a
- * new compiler is compiled again and an unchanged one never is. A worker
+ * from its content, its component dependencies and the compiler's version.
+ * An edited component also recompiles its callers in a new worker. A worker
  * loads each compiled closure once and keeps it: rendering is one call,
  * with no file check. A worker keeps what it has loaded until it ends, and
  * the development server restarts workers when a watched file changes.
@@ -133,6 +133,10 @@ final class Arc
         foreach ($files === false ? [] : $files as $file) {
             $count += (int) @unlink($file);
         }
+        $indexes = glob($this->cache . '/*.deps.json');
+        foreach ($indexes === false ? [] : $indexes as $file) {
+            @unlink($file);
+        }
         return $count;
     }
 
@@ -163,9 +167,35 @@ final class Arc
                 . " has no template at {$file}.",
             );
         }
-        $compiled = $this->cache . '/' . $name . '.' . hash('xxh128', Compiler::VERSION . "\0" . $source) . '.php';
+        $identity = Compiler::VERSION . "\0" . $file . "\0" . $source;
+        $index = $this->cache . '/' . $name . '.' . hash('xxh128', $identity) . '.deps.json';
+        $manifest = @file_get_contents($index);
+        $dependencies = json_decode($manifest === false ? 'null' : $manifest, true);
+        $code = null;
+        if (!is_array($dependencies) || !array_is_list($dependencies)) {
+            $code = $this->compiler->compile($source, $file, $component, $this->exists, $this->props);
+            $dependencies = $this->compiler->dependencies();
+        }
+        // Only first load (or the deployment command) touches dependencies. The index
+        // is determined by this source; component contents determine the artifact name.
+        foreach ($dependencies as $dependency) {
+            if (!is_string($dependency) || !self::validName($dependency)) {
+                throw new ArcException("Invalid component dependency in {$index}.");
+            }
+            $dependencyFile = $this->path . '/components/' . str_replace('.', '/', $dependency) . '.arc.php';
+            $dependencySource = @file_get_contents($dependencyFile);
+            if ($dependencySource === false) {
+                throw new ArcException("The component <{$dependency}> has no template at {$dependencyFile}.");
+            }
+            $identity .= "\0" . $dependency . "\0" . hash('xxh128', $dependencySource);
+        }
+        $compiled = $this->cache . '/' . $name . '.' . hash('xxh128', $identity) . '.php';
         if (!is_file($compiled)) {
-            $this->write($compiled, $this->compiler->compile($source, $file, $component, $this->exists, $this->props));
+            $code ??= $this->compiler->compile($source, $file, $component, $this->exists, $this->props);
+            $this->write($compiled, $code);
+        }
+        if ($code !== null) {
+            $this->write($index, json_encode($dependencies, JSON_THROW_ON_ERROR));
         }
         return $compiled;
     }

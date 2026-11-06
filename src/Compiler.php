@@ -21,7 +21,7 @@ final class Compiler
     /**
      * Part of every compiled file's name: a new compiler compiles again.
      */
-    public const string VERSION = '2';
+    public const string VERSION = '3';
 
     private const array WITH_ARGUMENTS = ['if', 'elseif', 'unless', 'foreach', 'for', 'while', 'props'];
     private const array WITHOUT_ARGUMENTS = [
@@ -151,6 +151,16 @@ final class Compiler
             $head = "static function (\\Crab\\Arc\\Arc \$__arc, array \$__data): string {\n    \\extract(\$__data, \\EXTR_SKIP);\n";
         }
         return "<?php\n\n/* Compiled by Arc from {$from}; do not edit. */\n\nreturn {$head}{$hoisted}    \$__o = '';\n{$this->code}    return \$__o;\n};\n";
+    }
+
+    /**
+     * The components referenced by the last compilation, including calls inside branches.
+     *
+     * @return list<string>
+     */
+    public function dependencies(): array
+    {
+        return array_keys($this->components);
     }
 
     private function body(): void
