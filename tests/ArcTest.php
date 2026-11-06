@@ -398,6 +398,44 @@ final class ArcTest extends TestCase
         $this->arc()->render('missing');
     }
 
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function reservedPropNames(): iterable
+    {
+        foreach (['__o', '__arc', '__data', '__error', '__c0', '__s1', '__future', '__'] as $name) {
+            yield $name => [$name];
+        }
+    }
+
+    #[DataProvider('reservedPropNames')]
+    public function testPropsCannotUseCompilerVariableNames(string $name): void
+    {
+        $this->component('card', "\n@props(string \${$name}){{ \${$name} }}");
+        $this->view('page', '<Card :' . $name . '="$value" />');
+        foreach (['component', 'caller'] as $target) {
+            try {
+                $target === 'component'
+                    ? $this->arc()->component('card')
+                    : $this->arc()->render('page', [
+                        'value' => 'Expected',
+                    ]);
+                self::fail('An internal prop name was accepted.');
+            } catch (ArcException $error) {
+                self::assertStringContainsString('reserved $' . $name . ' parameter', $error->getMessage());
+                self::assertStringContainsString('names beginning with $__ belong to Arc', $error->getMessage());
+                self::assertStringContainsString('card.arc.php on line 2', $error->getMessage());
+            }
+        }
+    }
+
+    public function testSingleUnderscorePropsAndInternalNamesInStringsRemainValid(): void
+    {
+        $this->component('card', '@props(string $_value, string $text = \'$__o\'){{ $_value }}{{ $text }}');
+        $this->view('page', '<Card :_value="$value" />');
+        self::assertSame('Expected$__o', $this->arc()->render('page', ['value' => 'Expected']));
+    }
+
     public function testLoopControlCannotEscapeIntoAComponentClosure(): void
     {
         $this->component('card', '@props(string $slot = \'\'){!! $slot !!}');

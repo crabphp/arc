@@ -155,6 +155,8 @@ A layout is a component like any other: there is no `@extends` or `@section`. Th
 
 A prop the component does not declare, or a required one left out, is a compile error at the tag's line. Arc reads the component's @props declaration while compiling the caller. A component that has no file is also a compile error at the tag's line. If a component throws while it is called, the error names the calling template and tag line.
 
+Variable names beginning with `$__` belong to Arc's compiler. `@props` rejects every name with that prefix, including `$__o`, `$__arc`, and generated slot and component variables. Choose other names for template locals and view data too; a single leading underscore is allowed.
+
 ## How it stays fast
 
 - **Cached compilation.** A template compiles to a closure in `storage/arc`, under a name made from its source, its referenced component sources, and Arc's compiler version. A small dependency index lets a new worker check its callers without recompiling unchanged templates. The worker loads each closure once and keeps it: warm rendering has no file checks.

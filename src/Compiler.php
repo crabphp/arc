@@ -21,7 +21,7 @@ final class Compiler
     /**
      * Part of every compiled file's name: a new compiler compiles again.
      */
-    public const string VERSION = '11';
+    public const string VERSION = '12';
 
     private const string MARKS = '/\{\{--|@\{\{|@@|\{!!|\{\{|<\?php|<\?=|<\/?[A-Z][A-Za-z0-9]*(?:\.[A-Z][A-Za-z0-9]*)*|@[a-z]+/';
 
@@ -846,8 +846,14 @@ final class Compiler
                 );
             }
             $name = $match['name'];
-            if ($name === '__arc') {
-                throw ArcException::at($file, $line, '@props cannot declare the reserved $__arc parameter.');
+            if (str_starts_with($name, '__')) {
+                throw ArcException::at(
+                    $file,
+                    $line,
+                    '@props cannot declare the reserved $'
+                    . $name
+                    . ' parameter; names beginning with $__ belong to Arc.',
+                );
             }
             if (isset($definitions[$name])) {
                 throw ArcException::at($file, $line, 'The @props parameter $' . $name . ' is declared twice.');
