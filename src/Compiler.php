@@ -21,7 +21,9 @@ final class Compiler
     /**
      * Part of every compiled file's name: a new compiler compiles again.
      */
-    public const string VERSION = '9';
+    public const string VERSION = '10';
+
+    private const string MARKS = '/\{\{--|@\{\{|@@|\{!!|\{\{|<\?php|<\?=|<\/?[A-Z][A-Za-z0-9]*(?:\.[A-Z][A-Za-z0-9]*)*|@[a-z]+/';
 
     private const array WITH_ARGUMENTS = ['if', 'elseif', 'unless', 'foreach', 'for', 'while', 'props'];
     private const array WITHOUT_ARGUMENTS = [
@@ -154,7 +156,7 @@ final class Compiler
         $from = str_replace('*/', '* /', $file);
         if ($component) {
             $parameters = $this->props ?? '';
-            if (!preg_match('/\$slot\b/', $parameters)) {
+            if (!isset($this->definitions['slot'])) {
                 $parameters = trim($parameters) === '' ? 'string $slot = \'\'' : $parameters . ', string $slot = \'\'';
             }
             $head = "static function (\\Crab\\Arc\\Arc \$__arc, {$parameters}): string {\n";
@@ -270,8 +272,7 @@ final class Compiler
 
     private function body(): void
     {
-        $pattern = '/\{\{--|@\{\{|@@|\{!!|\{\{|<\?php|<\?=|<\/?[A-Z][A-Za-z0-9]*(?:\.[A-Z][A-Za-z0-9]*)*|@[a-z]+/';
-        while (preg_match($pattern, $this->source, $match, PREG_OFFSET_CAPTURE, $this->position) === 1) {
+        while (preg_match(self::MARKS, $this->source, $match, PREG_OFFSET_CAPTURE, $this->position) === 1) {
             [$mark, $at] = $match[0];
             $text = substr($this->source, $this->position, $at - $this->position);
             $this->position = $at + strlen($mark);
@@ -566,7 +567,6 @@ final class Compiler
         if (isset($this->definitions['slot']) && $this->definitions['slot']['required']) {
             throw $this->error($at, '@props must give $slot a default value, such as string $slot = \'\'');
         }
-        $this->definitions['slot'] ??= ['required' => false, 'variadic' => false];
         $this->props = $parameters;
         $this->propsLine = $this->argumentsLine;
     }
@@ -929,47 +929,36 @@ final class Compiler
      *
      * @return array{parameters: string, line: int}|null
      */
-    public static function propsDeclaration(string $source): ?array
+    public static function propsDeclaration(string $source, string $file = 'component.arc.php'): ?array
     {
-        if (preg_match('/@props\\b/', $source, $match, PREG_OFFSET_CAPTURE) !== 1) {
-            return null;
-        }
-        $at = $match[0][1];
-        $start = $at + strlen($match[0][0]);
-        while (($source[$start] ?? '') === ' ' || ($source[$start] ?? '') === "\t") {
-            ++$start;
-        }
-        if (($source[$start] ?? '') !== '(') {
-            return ['parameters' => '', 'line' => substr_count($source, "\n", 0, $at) + 1];
-        }
-        $depth = 0;
-        $quote = null;
-        $length = strlen($source);
-        for ($index = $start; $index < $length; ++$index) {
-            $char = $source[$index];
-            if ($quote !== null) {
-                if ($char === '\\') {
-                    ++$index;
-                } elseif ($char === $quote) {
-                    $quote = null;
-                }
-                continue;
-            }
-            if ($char === '\'' || $char === '"') {
-                $quote = $char;
-            } elseif ($char === '(') {
-                ++$depth;
-            } elseif ($char === ')' && --$depth === 0) {
+        $scanner = new self();
+        $scanner->source = $source;
+        $scanner->file = $file;
+        // Follow the same marks and lexical boundaries as body(), without
+        // compiling component calls or treating text inside PHP as directives.
+        while (preg_match(self::MARKS, $source, $match, PREG_OFFSET_CAPTURE, $scanner->position) === 1) {
+            [$mark, $at] = $match[0];
+            $scanner->position = $at + strlen($mark);
+            if ($mark === '@props') {
                 return [
-                    'parameters' => trim(substr($source, $start + 1, $index - $start - 1)),
-                    'line' => substr_count($source, "\n", 0, $at) + 1,
+                    'parameters' => $scanner->arguments($at, 'props'),
+                    'line' => $scanner->line($at),
                 ];
             }
+            if ($mark === '{{--') {
+                $scanner->skipComment($at);
+            } elseif ($mark === '{{' || $mark === '{!!') {
+                $scanner->value($at, $mark === '{{' ? '}}' : '!!}', false);
+            } elseif ($mark === '<?php' || $mark === '<?=') {
+                $end = self::phpEnd($source, $scanner->position, '?>');
+                $scanner->position = $end === false ? strlen($source) : $end + 2;
+            } elseif (str_starts_with($mark, '<') && !str_starts_with($mark, '</')) {
+                $scanner->attributes($at);
+            } elseif (in_array(substr($mark, 1), self::WITH_ARGUMENTS, true)) {
+                $scanner->arguments($at, substr($mark, 1));
+            }
         }
-        return [
-            'parameters' => substr($source, $start + 1),
-            'line' => substr_count($source, "\n", 0, $at) + 1,
-        ];
+        return null;
     }
 
     /**

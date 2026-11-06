@@ -65,7 +65,7 @@ final class Arc
             if ($source === false) {
                 return null;
             }
-            $declaration = Compiler::propsDeclaration($source);
+            $declaration = Compiler::propsDeclaration($source, $file);
             return (
                 $declaration === null
                     ? null

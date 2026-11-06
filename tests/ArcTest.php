@@ -128,6 +128,39 @@ final class ArcTest extends TestCase
         );
     }
 
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function ignoredPropDeclarations(): iterable
+    {
+        yield 'Arc comment' => ['{{-- @props(string $old) --}}', ''];
+        yield 'escaped directive' => ['@@props(string $old)', '@props(string $old)'];
+        yield 'PHP string' => ["<?php \$text = '@props(string \$old)'; ?>", ''];
+        yield 'PHP comment' => ['<?php /* @props(string $old) */ $text = ""; ?>', ''];
+        yield 'escaped value string' => ["{{ '@props(string \$old)' }}", '@props(string $old)'];
+        yield 'raw value string' => ["{!! '@props(string \$old)' !!}", '@props(string $old)'];
+        yield 'directive argument' => ["@if(false && '@props(string \$old)')ignored@endif", ''];
+        yield 'component attribute' => ['<Badge title="@props(string $old)" />', '@props(string $old)'];
+    }
+
+    #[DataProvider('ignoredPropDeclarations')]
+    public function testPropDiscoveryUsesTheTemplateLexer(string $prefix, string $output): void
+    {
+        $this->component('badge', '@props(string $title){{ $title }}');
+        $this->component('card', $prefix . "\n@props(string \$title){{ \$title }}");
+        $this->view('page', '<Card title="Correct" />');
+        $declaration = Compiler::propsDeclaration($prefix . "\n@props(string \$title)");
+        self::assertSame(['parameters' => 'string $title', 'line' => 2], $declaration);
+        self::assertSame($output . 'Correct', str_replace("\n", '', $this->arc()->render('page')));
+    }
+
+    public function testSlotMentionedInAStringDefaultDoesNotDeclareTheSlotParameter(): void
+    {
+        $this->component('card', '@props(string $text = \'$slot\')<h1>{{ $text }}</h1>{!! $slot !!}');
+        $this->view('page', '<Card>Body</Card><Card />');
+        self::assertSame('<h1>$slot</h1>Body<h1>$slot</h1>', $this->arc()->render('page'));
+    }
+
     public function testComponentsNestAndLiveInFolders(): void
     {
         mkdir($this->directory . '/views/components/forms');
