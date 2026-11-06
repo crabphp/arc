@@ -94,6 +94,8 @@ A line that holds only a statement, such as `@foreach(...)` or `{{-- --}}`, leav
 
 A view's variables are the data given to it. `<?=` is refused: Arc builds each page as a string rather than through PHP's output buffer, which the worker shares between the requests it serves at once.
 
+Each `<?php ... ?>` block must contain complete statements, with any PHP control structures closed inside that block. Use Arc directives such as `@if` and `@foreach` to control template markup, including named slots. PHP control flow spanning blocks (for example, `<?php if ($show) { ?>...<?php } ?>`) and `goto` are compile errors. A complete PHP conditional that only sets variables inside one block is supported.
+
 ### Escaping by context
 
 `{{ }}` escapes `<`, `>`, `&` and both quotes. Put attribute values inside quotes. HTML escaping does not validate URL schemes, and does not make a value safe inside JavaScript, CSS, `style`, or event-handler attributes such as `onclick`. Keep untrusted data out of those contexts; a quoted `data-*` attribute lets JavaScript read a string without inserting it into executable code.

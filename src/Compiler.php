@@ -21,7 +21,7 @@ final class Compiler
     /**
      * Part of every compiled file's name: a new compiler compiles again.
      */
-    public const string VERSION = '8';
+    public const string VERSION = '9';
 
     private const array WITH_ARGUMENTS = ['if', 'elseif', 'unless', 'foreach', 'for', 'while', 'props'];
     private const array WITHOUT_ARGUMENTS = [
@@ -400,6 +400,28 @@ final class Compiler
         $this->position = $end === false ? strlen($this->source) : $end + 2;
         if (trim($inner) === '') {
             throw $this->error($at, 'The <?php block is empty');
+        }
+        // PHP must not hide branches around tags from the slot compiler. A
+        // standalone parse rejects unfinished braced, alternative and unbraced
+        // control flow without adding any instructions to rendered templates.
+        try {
+            $tokens = token_get_all('<?php ' . $inner, TOKEN_PARSE);
+        } catch (\ParseError $error) {
+            $line = $this->line($start) + $error->getLine() - 1;
+            throw new ArcException(
+                'PHP statements must be complete within one <?php ... ?> block; use Arc directives for control flow '
+                . "across template markup: {$error->getMessage()} in {$this->file} on line {$line}.",
+                0,
+                $error,
+            );
+        }
+        foreach ($tokens as $token) {
+            if (is_array($token) && $token[0] === T_GOTO) {
+                throw $this->errorForLine(
+                    $this->line($start) + $token[2] - 1,
+                    'goto is not supported in PHP blocks; use Arc directives',
+                );
+            }
         }
         $this->flush();
         $this->emit('    ' . trim($inner) . "\n", $this->line($start + strspn($inner, " \t\r\n")), true);

@@ -191,6 +191,58 @@ final class ArcTest extends TestCase
         self::assertSame('Heading|default|', $this->arc()->render('page', ['show' => false]));
     }
 
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function crossBlockPhpCases(): iterable
+    {
+        yield 'braced condition' => ['<Card>\n<?php if ($show) { ?><Slot name="footer">Footer</Slot><?php } ?></Card>'];
+        yield 'alternative syntax' => [
+            '<Card>\n<?php if ($show): ?><Slot name="footer">Footer</Slot><?php endif; ?></Card>',
+        ];
+        yield 'unbraced condition' => ['<Card>\n<?php if ($show) ?><Slot name="footer">Footer</Slot></Card>'];
+        yield 'loop iterations' => [
+            '@foreach($items as $item)<Card>\n<?php if ($item) { ?><Slot name="footer">{{ $item }}</Slot><?php } ?></Card>@endforeach',
+        ];
+    }
+
+    #[DataProvider('crossBlockPhpCases')]
+    public function testPhpControlFlowAcrossTemplateMarkupIsRejected(string $source): void
+    {
+        $this->component('card', '@props(string $footer = \'Default\'){!! $footer !!}');
+        $this->view('page', str_replace('\\n', "\n", $source));
+        try {
+            $this->arc()->compileAll();
+            self::fail('PHP control flow across template markup was accepted.');
+        } catch (ArcException $error) {
+            self::assertStringContainsString('complete within one <?php ... ?> block', $error->getMessage());
+            self::assertStringContainsString('use Arc directives', $error->getMessage());
+            self::assertStringContainsString('page.arc.php on line 2', $error->getMessage());
+        }
+    }
+
+    public function testPhpGotoCannotSkipSlotInitialization(): void
+    {
+        $this->component('card', '@props(string $footer = \'Default\'){!! $footer !!}');
+        $this->view(
+            'page',
+            '<Card><?php if (!$show) { goto skip; } ?><Slot name="footer">Footer</Slot><?php skip: ?></Card>',
+        );
+        $this->expectExceptionMessage('goto is not supported in PHP blocks; use Arc directives');
+        $this->arc()->compileAll();
+    }
+
+    public function testCompletePhpStatementsCanSetVariablesForTemplateControlFlow(): void
+    {
+        $this->view(
+            'page',
+            '<?php $value = ""; if ($show) { $value = "yes"; } ?>@if($value){{ $value }}@else no@endif',
+        );
+        $arc = $this->arc();
+        self::assertSame('yes', $arc->render('page', ['show' => true]));
+        self::assertSame(' no', $arc->render('page', ['show' => false]));
+    }
+
     public function testLowercaseTagsAreAlwaysHtml(): void
     {
         $this->component('card', '<b>card</b>');
