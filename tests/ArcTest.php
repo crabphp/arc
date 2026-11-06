@@ -11,6 +11,7 @@ use Crab\Arc\ArcPlugin;
 use Crab\Arc\Compiler;
 use Crab\Config\Config;
 use Crab\Contracts\Console\Output;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class ArcTest extends TestCase
@@ -74,6 +75,34 @@ final class ArcTest extends TestCase
     {
         $this->view('page', '{{-- hidden --}}me@example.com @@if @{{ $x }} @unknown');
         self::assertSame('me@example.com @if {{ $x }} @unknown', $this->arc()->render('page'));
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function phpDelimiterCases(): iterable
+    {
+        yield 'quoted expression' => ['{{ "}}" }}', '}}'];
+        yield 'raw expression' => ["{!! '!!}' !!}", '!!}'];
+        yield 'escaped quote' => ['{{ "a\\"}}b" }}', 'a&quot;}}b'];
+        yield 'interpolated string' => ['{{ "x{$value}}}" }}', 'xA}}'];
+        yield 'block comment' => ['{{ 1 /* }} */ + 2 }}', '3'];
+        yield 'line comment' => ["{{ 1 // }}\n+ 2 }}", '3'];
+        yield 'PHP string' => ['<?php $a = "?>"; ?>{{ $a }}', '?&gt;'];
+        yield 'standalone PHP' => ["<?php\n\$a = \"?>\";\n?>\n{{ \$a }}", '?&gt;'];
+        yield 'PHP comment' => ['<?php /* ?> */ $a = 3; ?>{{ $a }}', '3'];
+        yield 'PHP nowdoc' => ["<?php\n\$a = <<<'TEXT'\n?>\nTEXT;\n?>{{ \$a }}", '?&gt;'];
+        yield 'expression nowdoc' => ["{{ <<<'TEXT'\n}}\nTEXT\n}}", '}}'];
+        yield 'attribute interpolation' => ['<Card title="{{ \'}}\' }}" />', '}}'];
+        yield 'nested braces' => ['{{ (function () { if (true) { return "}}"; }})() }}', '}}'];
+    }
+
+    #[DataProvider('phpDelimiterCases')]
+    public function testPhpStringsAndCommentsKeepTheirDelimiters(string $source, string $expected): void
+    {
+        $this->component('card', '@props(string $title){{ $title }}');
+        $this->view('page', $source);
+        self::assertSame($expected, $this->arc()->render('page', ['value' => 'A']));
     }
 
     public function testComponentsTakePropsAndSlots(): void

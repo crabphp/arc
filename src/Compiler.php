@@ -21,7 +21,7 @@ final class Compiler
     /**
      * Part of every compiled file's name: a new compiler compiles again.
      */
-    public const string VERSION = '6';
+    public const string VERSION = '7';
 
     private const array WITH_ARGUMENTS = ['if', 'elseif', 'unless', 'foreach', 'for', 'while', 'props'];
     private const array WITHOUT_ARGUMENTS = [
@@ -280,7 +280,7 @@ final class Compiler
         try {
             $end = match (true) {
                 $mark === '{{--' => ($close = strpos($this->source, '--}}', $saved)) === false ? null : $close + 4,
-                $mark === '<?php' => ($close = strpos($this->source, '?>', $saved)) === false ? null : $close + 2,
+                $mark === '<?php' => ($close = self::phpEnd($this->source, $saved, '?>')) === false ? null : $close + 2,
                 $mark === '<?=' => null,
                 str_starts_with($mark, '</') => ($this->source[$this->position] ?? '') === '>'
                     ? $this->position + 1
@@ -325,7 +325,7 @@ final class Compiler
 
     private function value(int $at, string $close, bool $escape): void
     {
-        $end = strpos($this->source, $close, $this->position);
+        $end = self::phpEnd($this->source, $this->position, $close);
         if ($end === false) {
             throw $this->error($at, 'The value is not closed with ' . $close);
         }
@@ -349,7 +349,7 @@ final class Compiler
     private function php(int $at): void
     {
         $start = $this->position;
-        $end = strpos($this->source, '?>', $this->position);
+        $end = self::phpEnd($this->source, $this->position, '?>');
         $inner = $end === false
             ? substr($this->source, $this->position)
             : substr($this->source, $this->position, $end - $this->position);
@@ -980,7 +980,7 @@ final class Compiler
                 $attributes[$prop] = '(' . trim($value) . ')';
                 continue;
             }
-            $attributes[$prop] = $this->interpolate($value);
+            $attributes[$prop] = $this->interpolate($value, $at);
         }
     }
 
@@ -988,27 +988,72 @@ final class Compiler
      * A text attribute as a PHP string expression, with its {{ }} values joined in
      * unescaped: a prop is data, and the component escapes it where it outputs it.
      */
-    private function interpolate(string $value): string
+    private function interpolate(string $value, int $at): string
     {
-        $pieces = preg_split(
-            '/(\{\{.*?\}\}|\{!!.*?!!\})/s',
-            $value,
-            -1,
-            PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY,
-        );
         $parts = [];
-        foreach ($pieces === false ? [$value] : $pieces as $piece) {
-            $edge = match (true) {
-                str_starts_with($piece, '{!!') => 3,
-                str_starts_with($piece, '{{') => 2,
-                default => 0,
-            };
-            $parts[] = $edge === 0 ? self::literal($piece) : '(' . trim(substr($piece, $edge, -$edge)) . ')';
+        $position = 0;
+        while (preg_match('/\{!!|\{\{/', $value, $match, PREG_OFFSET_CAPTURE, $position)) {
+            [$mark, $start] = $match[0];
+            if ($start > $position) {
+                $parts[] = self::literal(substr($value, $position, $start - $position));
+            }
+            $start += strlen($mark);
+            $close = $mark === '{{' ? '}}' : '!!}';
+            $end = self::phpEnd($value, $start, $close);
+            if ($end === false) {
+                throw $this->error($at, 'The attribute value is not closed with ' . $close);
+            }
+            $parts[] = '(' . trim(substr($value, $start, $end - $start)) . ')';
+            $position = $end + strlen($close);
+        }
+        if ($position < strlen($value)) {
+            $parts[] = self::literal(substr($value, $position));
         }
         if ($parts === []) {
             return "''";
         }
         return count($parts) === 1 && $parts[0][0] === '\'' ? $parts[0] : implode(' . ', $parts);
+    }
+
+    /**
+     * Finds a delimiter outside PHP strings, comments and nested expressions.
+     * PHP's lexer also handles escaped quotes, interpolation and heredoc/nowdoc.
+     */
+    private static function phpEnd(string $source, int $start, string $close): int|false
+    {
+        $position = $start - 6; // The synthetic opening tag is not part of the source.
+        $stack = [];
+        foreach (token_get_all('<?php ' . substr($source, $start)) as $lexeme) {
+            if (is_array($lexeme)) {
+                [$kind, $text] = $lexeme;
+                if ($kind === T_CLOSE_TAG) {
+                    return $close === '?>' ? $position : false;
+                }
+                if ($kind === T_START_HEREDOC) {
+                    $stack[] = T_END_HEREDOC;
+                } elseif ($kind === T_END_HEREDOC) {
+                    array_pop($stack);
+                } elseif ($kind === T_CURLY_OPEN || $kind === T_DOLLAR_OPEN_CURLY_BRACES) {
+                    $stack[] = '}';
+                } elseif ($kind === T_ATTRIBUTE) {
+                    $stack[] = ']';
+                }
+                $position += strlen($text);
+                continue;
+            }
+            if ($stack === [] && substr_compare($source, $close, $position, strlen($close)) === 0) {
+                return $position;
+            }
+            if ($lexeme === end($stack)) {
+                array_pop($stack);
+            } elseif ($lexeme === '"' || $lexeme === '`') {
+                $stack[] = $lexeme;
+            } elseif (isset(['(' => ')', '[' => ']', '{' => '}'][$lexeme])) {
+                $stack[] = ['(' => ')', '[' => ']', '{' => '}'][$lexeme];
+            }
+            $position += strlen($lexeme);
+        }
+        return false;
     }
 
     private function text(string $text): void
