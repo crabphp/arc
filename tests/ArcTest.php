@@ -279,6 +279,22 @@ final class ArcTest extends TestCase
         self::assertSame(2, $this->arc()->clear());
     }
 
+    public function testAdjacentComponentErrorsNameTheFailingTagLine(): void
+    {
+        $this->component('good', 'good');
+        $this->component('bad', '{{ missing_arc_test_function() }}');
+        foreach (["<Good />\n<Bad />", "<Good>body</Good>\n<Good />\n<Bad />"] as $index => $source) {
+            $this->view('page', $source);
+            try {
+                $this->arc()->render('page');
+                self::fail('The failing component returned.');
+            } catch (ArcException $error) {
+                self::assertStringContainsString('page.arc.php on line ' . ($index + 2), $error->getMessage());
+                self::assertInstanceOf(\Error::class, $error->getPrevious());
+            }
+        }
+    }
+
     public function testCompileAllCompilesEveryTemplate(): void
     {
         mkdir($this->directory . '/views/orders');

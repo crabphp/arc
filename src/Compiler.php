@@ -21,7 +21,7 @@ final class Compiler
     /**
      * Part of every compiled file's name: a new compiler compiles again.
      */
-    public const string VERSION = '5';
+    public const string VERSION = '6';
 
     private const array WITH_ARGUMENTS = ['if', 'elseif', 'unless', 'foreach', 'for', 'while', 'props'];
     private const array WITHOUT_ARGUMENTS = [
@@ -556,6 +556,15 @@ final class Compiler
         }
         $this->components[$file] ??= $this->variable('c');
         if ($selfClosing) {
+            // Each guarded append has one component location. Single calls retain
+            // the same generated instructions, including the common loop case.
+            foreach ($this->parts as [, , $componentLine]) {
+                if ($componentLine === null) {
+                    continue;
+                }
+                $this->flush();
+                break;
+            }
             $this->parts[] = [
                 false,
                 $this->call($name, $attributes, [], $this->line($at)),
