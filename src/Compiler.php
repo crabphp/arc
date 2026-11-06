@@ -200,19 +200,19 @@ final class Compiler
         if (!function_exists('proc_open')) {
             throw ArcException::at($file, 1, 'PHP compilation validation requires proc_open and the PHP CLI');
         }
-        $input = @tmpfile();
-        if ($input === false) {
-            throw ArcException::at($file, 1, 'Cannot create a temporary stream for PHP compilation validation');
+        // A file of its own, named on the command line: a shared stream handed to the child as its
+        // standard input is not read the same way on every platform, and empty input lints clean.
+        $path = @tempnam(sys_get_temp_dir(), 'arc-lint-');
+        if ($path === false) {
+            throw ArcException::at($file, 1, 'Cannot create a temporary file for PHP compilation validation');
         }
         try {
-            if (fwrite($input, $code) !== strlen($code) || !rewind($input)) {
+            if (@file_put_contents($path, $code) !== strlen($code)) {
                 throw ArcException::at($file, 1, 'Cannot write the PHP compilation validation input');
             }
-            // Use a file for stdin and one combined output pipe: neither a large
-            // template nor a compiler diagnostic can deadlock two full pipes.
             $process = @proc_open(
-                [PHP_BINARY, '-n', '-d', 'display_errors=stderr', '-d', 'log_errors=0', '-l'],
-                [0 => $input, 1 => ['pipe', 'w'], 2 => ['redirect', 1]],
+                [PHP_BINARY, '-n', '-d', 'display_errors=stderr', '-d', 'log_errors=0', '-l', $path],
+                [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['redirect', 1]],
                 $pipes,
             );
             if ($process === false) {
@@ -222,13 +222,13 @@ final class Compiler
             fclose($pipes[1]);
             $status = proc_close($process);
         } finally {
-            fclose($input);
+            @unlink($path);
         }
         if ($status === 0) {
             return;
         }
         if (preg_match(
-            '/^(?:PHP )?(?:Fatal|Parse) error:\s*(.*?) in Standard input code on line (\d+)$/ms',
+            '/^(?:PHP )?(?:Fatal|Parse) error:\s*(.*?) in \S+ on line (\d+)$/ms',
             (string) $output,
             $match,
         )) {
