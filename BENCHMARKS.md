@@ -20,30 +20,32 @@ php -d opcache.enable_cli=1 -d opcache.file_update_protection=0 -d opcache.jit=0
 
 Measured on 2026-11-06 with PHP 8.4.22 on Linux x86_64. Each renderer warms up
 for 1,000 renders before 30,000 timed renders. The workload and benchmark script
-are unchanged from baseline commit `3165536`. The fixed compiler is at
-`6438227`. Baseline and fixed runs were alternated, reversing their order on
+are unchanged. The baseline for this second review is `c16c911`; the fixed
+compiler is at `52e8eb5`. Baseline and fixed runs were alternated, reversing their order on
 every second pair, with five pairs for OPcache off and three for OPcache on.
-All runs used JIT off. Times below are microseconds per render.
+All runs used `opcache.jit=0`, with JIT's runtime `on` flag confirmed false.
+Times below are microseconds per render.
 
 | CLI OPcache | Renderer | Baseline median | Fixed median | Fixed range |
 | --- | --- | ---: | ---: | ---: |
-| Off | Hand-built PHP string | 25.79 | 26.23 | 25.60–26.75 |
-| Off | Arc | 32.90 | 31.41 | 31.13–32.98 |
-| Off | Raw PHP include + buffer | 46.80 | 47.15 | 46.07–49.53 |
-| On | Hand-built PHP string | 24.80 | 25.18 | 24.71–25.24 |
-| On | Arc | 32.07 | 30.99 | 30.58–31.43 |
-| On | Raw PHP include + buffer | 26.25 | 25.91 | 25.88–28.80 |
+| Off | Hand-built PHP string | 24.67 | 24.72 | 24.49–24.86 |
+| Off | Arc | 30.22 | 29.90 | 29.59–30.67 |
+| Off | Raw PHP include + buffer | 44.99 | 45.05 | 44.51–45.43 |
+| On | Hand-built PHP string | 23.50 | 23.97 | 23.49–24.01 |
+| On | Arc | 29.66 | 29.26 | 29.16–31.35 |
+| On | Raw PHP include + buffer | 24.98 | 25.39 | 25.09–25.45 |
 
-The initial, separate batches gave Arc medians of 30.64 before / 31.48 after
-with OPcache off, and 29.90 / 31.16 with it on. Variation affected the PHP
-baselines too, prompting the alternating comparison above. These measurements
-support retaining the warm rendering cost through the fixes, without claiming
-a speedup. Dependency checks and PHP syntax validation happen during compilation
-or first load, outside the timed warm loop. A regression test renders after
-moving both source and cache directories away from a warmed renderer.
+The generated PHP for all three benchmark templates is byte-for-byte identical
+before and after these fixes. The small timing differences fall within observed
+run variation; these measurements do not establish a speedup. Dependency checks
+and isolated PHP compilation validation happen during compilation or first
+load, outside the timed warm loop. The validation subprocess adds cold-start
+work, including for existing artifacts, with no new work on warm renders. A
+regression test renders after moving both source and cache directories away
+from a warmed renderer.
 
-For the fixed alternating runs, Arc took about 20% longer than the hand-built
-string with OPcache off, and about 23% longer with it on. It beat the repeatedly
+For the fixed alternating runs, Arc took about 21% longer than the hand-built
+string with OPcache off, and about 22% longer with it on. It beat the repeatedly
 parsed raw include with OPcache off; both PHP baselines were faster with
 OPcache on. These are results for this warm 50-card workload, not a ranking
 among template engines. **Second only to raw PHP, with JIT off, remains the

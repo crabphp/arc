@@ -4,6 +4,14 @@ Crab Arc follows [semantic versioning](https://semver.org). Before 1.0, a minor 
 
 ## Unreleased
 
+- **Second review fixes:** compilation and first load validate generated PHP in
+  an isolated CLI process, catching compile-time fatal errors without executing
+  template code. This requires `proc_open`, a writable temporary directory and
+  the PHP CLI at `PHP_BINARY`. PHP blocks must contain complete statements;
+  control flow spanning template markup and `goto` are rejected (use Arc
+  directives). Prop discovery respects comments and strings, directive arguments
+  and prop lists respect PHP comments, and all `$__` prop names are reserved for
+  the compiler. These checks add no work to warm rendering.
 - **Pre-publication fixes:** component edits invalidate cached callers in new
   workers; compilation and `arc:cache` reject malformed generated PHP with
   template source lines. Conditional named slots preserve defaults and reset
