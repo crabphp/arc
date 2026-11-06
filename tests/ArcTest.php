@@ -114,6 +114,51 @@ final class ArcTest extends TestCase
         ]]));
     }
 
+    public function testConditionalSlotsUseDefaultsWhenAbsentAndKeepExplicitEmptyContent(): void
+    {
+        $this->component(
+            'card',
+            '@props(string $footer = \'default\', string $title = \'title\')<h1>{{ $title }}</h1><footer>{!! $footer !!}</footer>{!! $slot !!}',
+        );
+        $this->view('page', '<Card title="Card">@if($show)<Slot name="footer">{{ $value }}</Slot>@endif body</Card>');
+        $arc = $this->arc();
+        self::assertSame('<h1>Card</h1><footer>default</footer> body', $arc->render('page', ['show' => false]));
+        self::assertSame('<h1>Card</h1><footer>&lt;footer&gt;</footer> body', $arc->render('page', [
+            'show' => true,
+            'value' => '<footer>',
+        ]));
+        self::assertSame('<h1>Card</h1><footer></footer> body', $arc->render('page', ['show' => true, 'value' => '']));
+    }
+
+    public function testConditionalSlotsAreResetForEveryLoopIteration(): void
+    {
+        $this->component('card', '@props(string $footer = \'default\')<footer>{!! $footer !!}</footer>');
+        $this->view(
+            'page',
+            '@foreach($items as $item)<Card>@if($item)<Slot name="footer">{{ $item }}</Slot>@endif</Card>@endforeach',
+        );
+        self::assertSame('<footer>first</footer><footer>default</footer><footer>last</footer><footer>default</footer>', $this->arc()->render('page', ['items' => [
+            'first',
+            '',
+            'last',
+            '',
+        ]]));
+    }
+
+    public function testNestedConditionalSlotsHaveIndependentDefaults(): void
+    {
+        $this->component(
+            'card',
+            '@props(string $footer = \'default\', string $head = \'head\'){!! $head !!}|{!! $footer !!}|{!! $slot !!}',
+        );
+        $this->view(
+            'page',
+            '<Card><Slot name="head">Heading</Slot>@if($show)<Slot name="footer"><Card>@if(false)<Slot name="footer">inner</Slot>@endif</Card></Slot>@endif</Card>',
+        );
+        self::assertSame('Heading|head|default||', $this->arc()->render('page', ['show' => true]));
+        self::assertSame('Heading|default|', $this->arc()->render('page', ['show' => false]));
+    }
+
     public function testLowercaseTagsAreAlwaysHtml(): void
     {
         $this->component('card', '<b>card</b>');

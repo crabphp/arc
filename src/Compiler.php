@@ -21,7 +21,7 @@ final class Compiler
     /**
      * Part of every compiled file's name: a new compiler compiles again.
      */
-    public const string VERSION = '4';
+    public const string VERSION = '5';
 
     private const array WITH_ARGUMENTS = ['if', 'elseif', 'unless', 'foreach', 'for', 'while', 'props'];
     private const array WITHOUT_ARGUMENTS = [
@@ -69,7 +69,7 @@ final class Compiler
     /**
      * Open component and slot tags.
      *
-     * @var list<array{kind: string, name: string, line: int, output: string, props: array<string, string>, slots: array<string, string>, blocks: int}>
+     * @var list<array{kind: string, name: string, line: int, output: string, props: array<string, string>, slots: array<string, string>, blocks: int, initialize?: int, conditional?: array<string, string>}>
      */
     private array $tags = [];
     /**
@@ -566,6 +566,7 @@ final class Compiler
         }
         $this->flush();
         $output = $this->variable('s');
+        $initialize = strlen($this->code);
         $this->emit("    {$output} = '';\n", $this->line($at));
         $this->tags[] = [
             'kind' => 'component',
@@ -575,6 +576,8 @@ final class Compiler
             'props' => $attributes,
             'slots' => [],
             'blocks' => count($this->blocks),
+            'initialize' => $initialize,
+            'conditional' => [],
         ];
         $this->outputs[] = $output;
     }
@@ -606,18 +609,33 @@ final class Compiler
                 throw $this->error($at, "The slot {$tag['name']} is given twice");
             }
             $this->tags[$index]['slots'][$tag['name']] = $tag['output'];
+            if ($tag['blocks'] > $this->tags[$index]['blocks']) {
+                $this->tags[$index]['conditional'][$tag['name']] = $tag['output'];
+            }
             return;
+        }
+        if ($tag['conditional'] !== []) {
+            // Insert on the existing initialization line so the source map stays valid.
+            // This runs before any branch, once per invocation (including loop iterations).
+            $initialize = '    ' . implode(' = ', $tag['conditional']) . ' = null;';
+            $this->code = substr_replace($this->code, $initialize, $tag['initialize'], 0);
         }
         $slots = $tag['slots'];
         $slots['slot'] = $tag['output'];
-        $this->parts[] = [false, $this->call($name, $tag['props'], $slots, $tag['line']), $tag['line'], $tag['line']];
+        $this->parts[] = [
+            false,
+            $this->call($name, $tag['props'], $slots, $tag['line'], $tag['conditional']),
+            $tag['line'],
+            $tag['line'],
+        ];
     }
 
     /**
      * @param array<string, string> $props
      * @param array<string, string> $slots
+     * @param array<string, string> $conditional Slots that may be absent at runtime.
      */
-    private function call(string $name, array $props, array $slots, int $line): string
+    private function call(string $name, array $props, array $slots, int $line, array $conditional = []): string
     {
         $definition = $this->definition(self::file($name), 0);
         $arguments = ['$__arc'];
@@ -655,7 +673,30 @@ final class Compiler
                 $arguments[] = "{$slot}: {$variable}";
             }
         }
-        return $this->components[self::file($name)] . '(' . implode(', ', $arguments) . ')';
+        $component = $this->components[self::file($name)];
+        if ($conditional !== []) {
+            $fixed = [];
+            $optional = [];
+            foreach ($provided as $prop => $expression) {
+                $argument = self::literal($prop) . ' => ' . $expression;
+                if (isset($conditional[$prop])) {
+                    $optional[] = $argument;
+                } else {
+                    $fixed[] = $argument;
+                }
+            }
+            // Omit absent slots so PHP applies the component's own defaults. Empty
+            // strings are supplied content; only the null sentinel is left out.
+            return (
+                $component
+                . '($__arc, ...(['
+                . implode(', ', $fixed)
+                . '] + \\array_filter(['
+                . implode(', ', $optional)
+                . "], 'is_string')))"
+            );
+        }
+        return $component . '(' . implode(', ', $arguments) . ')';
     }
 
     /**
