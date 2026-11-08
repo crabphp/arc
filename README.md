@@ -159,7 +159,7 @@ Variable names beginning with `$__` belong to Arc's compiler. `@props` rejects e
 
 ## How it stays fast
 
-- **Cached compilation.** A template compiles to a closure in `storage/arc`, under a name made from its source, its referenced component sources, and Arc's compiler version. A small dependency index lets a new worker check its callers without recompiling unchanged templates. The worker loads each closure once and keeps it: warm rendering has no file checks.
+- **Cached compilation.** A template compiles to a closure in `storage/view`, under a name made from its source, its referenced component sources, and Arc's compiler version. A small dependency index lets a new worker check its callers without recompiling unchanged templates. The worker loads each closure once and keeps it: warm rendering has no file checks.
 - **One string.** The page is built by appending to a local string. Adjacent text and values become one append.
 - **Escaping inline.** `{{ }}` compiles to `htmlspecialchars()`, with no helper between.
 - **Components are calls.** Each component type is a closure, looked up once per template render, and each use is one call. When its @props declaration makes it safe, Arc emits positional arguments; otherwise it uses named arguments. Slots are rendered to strings before the call. Conditional named slots omit absent arguments so PHP applies the component's defaults.
@@ -170,26 +170,28 @@ The reproducible numbers and benchmark script are in [BENCHMARKS.md](BENCHMARKS.
 
 ## Deploying and developing
 
-Compile every template when deploying, then restart workers to load the new templates. Compilation validates generated PHP with an isolated `php -l` process, without executing template code. Syntax errors and PHP compile-time fatal errors fail the command with the template path and source line. This requires `proc_open`, a writable temporary directory, and a PHP CLI executable at `PHP_BINARY`; validation fails closed if it cannot run. `arc:cache` and a worker's first load also validate existing artifacts. Loaded closures need no further validation on warm renders. The check cannot detect every runtime error or missing data value.
+Compile every template when deploying, then restart workers to load the new templates. Compilation validates generated PHP with an isolated `php -l` process, without executing template code. Syntax errors and PHP compile-time fatal errors fail the command with the template path and source line. This requires `proc_open`, a writable temporary directory, and a PHP CLI executable at `PHP_BINARY`; validation fails closed if it cannot run. `view:cache` and a worker's first load also validate existing artifacts. Loaded closures need no further validation on warm renders. The check cannot detect every runtime error or missing data value.
 
 ```sh
-php cua arc:cache
+php cua view:cache
 ```
 
 To delete compiled templates and dependency indexes as a separate maintenance operation:
 
 ```sh
-php cua arc:clear
+php cua view:clear
 ```
 
 An edited template, or a caller whose component source changes, is compiled again on deployment or when a new worker first loads it. Loaded workers keep their closures until restarted. The development server restarts its workers when a watched file changes: add `resources` to `server.watch` in `config/server.php`.
+
+The plugin is named Arc, but its console commands use the framework-level `view:` namespace so deployment tooling does not depend on the view engine's implementation name.
 
 ## Settings
 
 | Setting | Default | |
 | --- | --- | --- |
-| `arc.path` | `resources/views` | The templates, relative to the application |
-| `arc.cache` | `storage/arc` | Where compiled templates are written |
+| `view.path` | `resources/views` | The templates, relative to the application |
+| `view.cache` | `storage/view` | Where compiled templates are written |
 
 ## License
 

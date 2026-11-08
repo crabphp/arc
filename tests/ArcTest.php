@@ -594,13 +594,13 @@ final class ArcTest extends TestCase
         $this->view('broken', "<p>\n{{ \$x + }}\n</p>");
         $app = new App(new Config([
             'app' => ['path' => $this->directory, 'storage' => $this->directory . '/storage'],
-            'arc' => ['path' => $this->directory . '/views', 'cache' => $this->directory . '/cache'],
+            'view' => ['path' => $this->directory . '/views', 'cache' => $this->directory . '/cache'],
         ]));
         $app->register(ArcPlugin::class);
         $output = $this->createMock(Output::class);
         $output->expects(self::once())->method('error')->with(self::stringContains('broken.arc.php on line 2'));
         $output->expects(self::never())->method('line');
-        self::assertSame(1, $app->console->run(['arc:cache'], $output));
+        self::assertSame(1, $app->console->run(['view:cache'], $output));
         self::assertSame([], glob($this->directory . '/cache/*.php'));
     }
 
@@ -652,7 +652,7 @@ final class ArcTest extends TestCase
         $this->view('page', '<Card />');
         $app = new App(new Config([
             'app' => ['path' => $this->directory, 'storage' => $this->directory . '/storage'],
-            'arc' => ['path' => $this->directory . '/views', 'cache' => $this->directory . '/cache'],
+            'view' => ['path' => $this->directory . '/views', 'cache' => $this->directory . '/cache'],
         ]));
         $app->register(ArcPlugin::class);
         $output = $this->createMock(Output::class);
@@ -661,7 +661,7 @@ final class ArcTest extends TestCase
             ->method('error')
             ->with(self::stringContains('card.arc.php on line ' . $line));
         $output->expects(self::never())->method('line');
-        self::assertSame(1, $app->console->run(['arc:cache'], $output));
+        self::assertSame(1, $app->console->run(['view:cache'], $output));
         self::assertSame([], glob($this->directory . '/cache/*.php'));
     }
 
@@ -760,7 +760,7 @@ final class ArcTest extends TestCase
         self::assertStringStartsWith('text/html', $response->getHeaderLine('Content-Type'));
         self::assertSame('yes', $response->getHeaderLine('X-Test'));
         self::assertSame('Hello x', $app->container->get(Arc::class)->render('hello', ['name' => 'x']));
-        self::assertNotSame([], glob($app->config->get('app.storage') . '/arc/*.php'), 'Compiled into storage/arc.');
+        self::assertNotSame([], glob($app->config->get('app.storage') . '/view/*.php'), 'Compiled into storage/view.');
     }
 
     public function testReadmeActionRegistersAndRendersWithConstructorServices(): void

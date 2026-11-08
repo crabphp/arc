@@ -19,7 +19,7 @@ final readonly class CacheTemplates implements Command
     public function description(): string
     {
         return <<<'TEXT'
-            Compile every Arc template ahead of the first request
+            Compile every view template ahead of the first request
 
             Run it when deploying, so that no worker compiles a template
             while it serves. A template that does not compile fails it.

@@ -12,15 +12,15 @@ use Crab\Contracts\Container\Container;
 use Crab\Contracts\Plugin;
 
 /**
- * Binds the Arc renderer, which view() uses, adds the "arc" settings and
- * the arc:cache and arc:clear commands. It adds no middleware.
+ * Binds the Arc renderer, which view() uses, adds the "view" settings and
+ * the view:cache and view:clear commands. It adds no middleware.
  */
 final class ArcPlugin implements Plugin
 {
     public function register(Container $container): void
     {
         $container->get(Config::class)->defaults(
-            'arc',
+            'view',
             ['path' => 'resources/views', 'cache' => null],
             [
                 'path' => ['type' => 'string', 'minLength' => 1],
@@ -30,24 +30,24 @@ final class ArcPlugin implements Plugin
 
         $container->singleton(Arc::class, static function (Container $container): Arc {
             $config = $container->get(Config::class);
-            $config->check('arc');
+            $config->check('view');
             $base = $config->get('app.path');
             $resolve = static fn(string $path): string => is_string($base)
                 && $base !== ''
                 && !str_starts_with($path, '/')
                     ? rtrim($base, '/') . '/' . $path
                     : $path;
-            $cache = $config->get('arc.cache');
+            $cache = $config->get('view.cache');
             return new Arc(
-                $resolve((string) $config->get('arc.path')),
-                is_string($cache) ? $resolve($cache) : rtrim((string) $config->get('app.storage'), '/') . '/arc',
+                $resolve((string) $config->get('view.path')),
+                is_string($cache) ? $resolve($cache) : rtrim((string) $config->get('app.storage'), '/') . '/view',
             );
         });
 
         if ($container->has(Console::class)) {
             $console = $container->get(Console::class);
-            $console->add('arc:cache', CacheTemplates::class);
-            $console->add('arc:clear', ClearTemplates::class);
+            $console->add('view:cache', CacheTemplates::class);
+            $console->add('view:clear', ClearTemplates::class);
         }
     }
 }

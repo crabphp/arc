@@ -18,9 +18,9 @@ final readonly class ClearTemplates implements Command
     public function description(): string
     {
         return <<<'TEXT'
-            Delete the compiled Arc templates
+            Delete the compiled view templates
 
-            They are compiled again when next rendered, or by arc:cache.
+            They are compiled again when next rendered, or by view:cache.
             TEXT;
     }
 
