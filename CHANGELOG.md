@@ -4,6 +4,9 @@ Crab Arc follows [semantic versioning](https://semver.org). Before 1.0, a minor 
 
 ## Unreleased
 
+## 0.2.0 — 2026-11-12
+
+- Requires `crabphp/framework` ^0.7.
 - Rename the template cache commands to the implementation-independent `view:cache` and `view:clear`. Update deployment scripts from `arc:cache` and `arc:clear`.
 
 ## 0.1.1 — 2026-11-06

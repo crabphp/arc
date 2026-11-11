@@ -1,6 +1,6 @@
 # Contributing
 
-Setup, formatting, linting and conventions follow [crabphp/framework's CONTRIBUTING.md](https://github.com/crabphp/framework/blob/main/CONTRIBUTING.md). Use PHP 8.4 or later, put a framework 0.6.x checkout at `../framework`, and run `composer install` here. The path repository uses that checkout; no external services are needed by its tests.
+Setup, formatting, linting and conventions follow [crabphp/framework's CONTRIBUTING.md](https://github.com/crabphp/framework/blob/main/CONTRIBUTING.md). Use PHP 8.4 or later, put a framework 0.7.x checkout at `../framework`, and run `composer install` here. The path repository uses that checkout; no external services are needed by its tests.
 
 Before a pull request, run here:
 
@@ -11,4 +11,4 @@ composer lint
 composer test
 ```
 
-CI runs the suite on Linux and macOS against framework `v0.6.3` and `main`.
+CI runs the suite on Linux and macOS against framework `v0.7.0` and `main`.
