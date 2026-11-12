@@ -82,6 +82,12 @@ final class Compiler
     private array $components = [];
     private ?string $props = null;
     /**
+     * The template's imports, moved above the closure: each statement and its source line.
+     *
+     * @var list<array{string, int}>
+     */
+    private array $uses = [];
+    /**
      * @var array<string, array{required: bool, variadic: bool}>
      */
     private array $definitions = [];
@@ -134,6 +140,7 @@ final class Compiler
         $this->tags = [];
         $this->components = [];
         $this->props = null;
+        $this->uses = [];
         $this->definitions = [];
         $this->componentDefinitions = [];
         $this->counter = 0;
@@ -165,6 +172,11 @@ final class Compiler
         }
         $prefix = "<?php\n\n/* Compiled by Arc from {$from}; do not edit. */\n";
         $lines = [];
+        // A use statement is a file's, so the template's imports go above its closure.
+        foreach ($this->uses as [$statement, $line]) {
+            $lines[substr_count($prefix, "\n") + 1] = $line;
+            $prefix .= $statement . "\n";
+        }
         $headLine = substr_count($prefix, "\n") + 3;
         for ($i = 0; $i < substr_count($head, "\n"); $i++) {
             $lines[$headLine + $i] = $this->propsLine + $i;
@@ -424,8 +436,138 @@ final class Compiler
                 );
             }
         }
+        // Imports are taken from a block at the very top of the template, before anything else.
+        $top = trim(substr($this->source, 0, $at)) === '' && $this->code === '' && $this->uses === [];
+        [$uses, $rest] = self::imports($tokens);
+        $stray = $top ? self::useAt($tokens, $rest) : self::useAt($tokens, 0);
+        if ($stray !== null) {
+            throw $this->errorForLine(
+                $this->line($start) + $stray - 1,
+                'A use statement belongs in a <?php block at the very top of the template, before any markup or other statement: move it there',
+            );
+        }
+        if ($top) {
+            foreach ($uses as [$statement, $line]) {
+                $global = self::globalImport($statement);
+                if ($global !== null) {
+                    throw $this->errorForLine(
+                        $this->line($start) + $line - 1,
+                        "{$global} is in the global namespace and needs no import: remove it from the use statement, which PHP warns has no effect",
+                    );
+                }
+                $this->uses[] = [$statement, $this->line($start) + $line - 1];
+            }
+            // The tokens were read from '<?php ' . $inner, so the rest starts that much earlier in $inner.
+            $skipped = self::offset($tokens, $rest) - strlen('<?php ');
+            $inner = substr($inner, $skipped);
+            $start += $skipped;
+            if (trim($inner) === '') {
+                // Only whitespace came before: the imports leave nothing behind.
+                $this->parts = [];
+                return;
+            }
+        }
         $this->flush();
         $this->emit('    ' . trim($inner) . "\n", $this->line($start + strspn($inner, " \t\r\n")), true);
+    }
+
+    /**
+     * The use statements a block starts with, and the index of the first token after them.
+     *
+     * @param list<array{int, string, int}|string> $tokens From token_get_all(), the open tag first.
+     * @return array{list<array{string, int}>, int} Each statement on one line with its line in the block.
+     */
+    private static function imports(array $tokens): array
+    {
+        $uses = [];
+        $index = 1;
+        $count = count($tokens);
+        while (true) {
+            while (
+                $index < $count
+                && is_array($tokens[$index])
+                && in_array($tokens[$index][0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)
+            ) {
+                $index++;
+            }
+            if ($index >= $count || !is_array($tokens[$index]) || $tokens[$index][0] !== T_USE) {
+                return [$uses, $index];
+            }
+            $line = $tokens[$index][2];
+            $statement = '';
+            for (; $index < $count && $tokens[$index] !== ';'; $index++) {
+                $token = $tokens[$index];
+                if (is_array($token) && in_array($token[0], [T_COMMENT, T_DOC_COMMENT], true)) {
+                    continue;
+                }
+                $statement .= is_array($token) ? $token[1] : $token;
+            }
+            $index++;
+            $uses[] = [trim((string) preg_replace('/\s+/', ' ', $statement)) . ';', $line];
+        }
+    }
+
+    /**
+     * A name the statement imports from the global namespace without an alias, which PHP warns has no
+     * effect, and a worker turns warnings into exceptions; null when there is none.
+     */
+    private static function globalImport(string $statement): ?string
+    {
+        $names = (string) preg_replace('/^use\s+(?:function\s+|const\s+)?/', '', rtrim($statement, ';'));
+        if (str_contains($names, '{')) {
+            // A group's names all share its prefix, so none is global.
+            return null;
+        }
+        foreach (explode(',', $names) as $clause) {
+            if (preg_match('/^\s*\\\\?([A-Za-z_][A-Za-z0-9_]*)\s*$/', $clause, $match) === 1) {
+                return $match[1];
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The line, in the block, of a use statement from the token at $from on, or null when there is none.
+     * A closure's use and a trait's use inside a class are not imports.
+     *
+     * @param list<array{int, string, int}|string> $tokens
+     */
+    private static function useAt(array $tokens, int $from): ?int
+    {
+        $depth = 0;
+        $previous = null;
+        foreach ($tokens as $index => $token) {
+            $text = is_array($token) ? $token[1] : $token;
+            if ($text === '}') {
+                $depth--;
+            } elseif (
+                $text === '{'
+                || is_array($token) && in_array($token[0], [T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES], true)
+            ) {
+                $depth++;
+            }
+            if ($index >= $from && $depth === 0 && is_array($token) && $token[0] === T_USE && $previous !== ')') {
+                return $token[2];
+            }
+            if (!is_array($token) || !in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT, T_OPEN_TAG], true)) {
+                $previous = $text;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Where the token at $index starts, in the text the tokens were read from.
+     *
+     * @param list<array{int, string, int}|string> $tokens
+     */
+    private static function offset(array $tokens, int $index): int
+    {
+        $offset = 0;
+        foreach (array_slice($tokens, 0, $index) as $token) {
+            $offset += strlen(is_array($token) ? $token[1] : $token);
+        }
+        return $offset;
     }
 
     private function directive(int $at, string $name): void

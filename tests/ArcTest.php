@@ -868,6 +868,99 @@ final class ArcTest extends TestCase
         }
     }
 
+    public function testTemplatesImportNamesAtTheTop(): void
+    {
+        $this->component('card', implode("\n", [
+            '<?php',
+            '// Imports, then a statement of the template.',
+            'use ArrayObject as Bag;',
+            'use function strtoupper as upper, strtolower as lower;',
+            'use const PHP_EOL as EOL;',
+            '$size = 3;',
+            '?>',
+            '@props(Bag $items)',
+            '<p>{{ upper(\'n\') }}={{ count($items) }}/{{ $size }}{{ EOL === "\n" ? \'.\' : \'!\' }}</p>',
+        ]));
+        $this->component('shelf', implode("\n", [
+            '<?php',
+            'use Crab\Arc\{Arc, ArcException as Failure};',
+            '?>',
+            '@props(Arc $arc, ?Failure $failure = null)',
+            '<b>{{ $failure === null ? \'fine\' : \'failed\' }}</b>',
+        ]));
+        $this->view('page', implode("\n", [
+            '<?php use Crab\Arc\Arc as Engine; ?>',
+            '<Card :items="new ArrayObject([1, 2])" />',
+            '<Shelf :arc="$arc" />',
+            '{{ $arc instanceof Engine ? \'engine\' : \'other\' }}',
+        ]));
+        $arc = $this->arc();
+        self::assertSame("<p>N=2/3.</p>\n<b>fine</b>\nengine", $arc->render('page', ['arc' => $arc]));
+        $compiled = (string) file_get_contents(glob($this->directory . '/cache/components.card.*.php')[0]);
+        self::assertMatchesRegularExpression(
+            '/\nuse ArrayObject as Bag;\nuse function strtoupper as upper, strtolower as lower;\nuse const PHP_EOL as EOL;\n.*\nreturn static function/s',
+            $compiled,
+            'The imports are the file\'s, above its closure.',
+        );
+    }
+
+    public function testAnImportElsewhereThanTheTopIsRefusedAtItsLine(): void
+    {
+        foreach ([
+            "<p>Hi</p>\n<?php use App\\User; ?>" => 2,
+            "<?php \$x = 1; ?>\n<?php use App\\User; ?>" => 2,
+            "<?php\n\$x = 1;\nuse App\\User;\n?>" => 3,
+            "{{-- A note --}}\n<?php use App\\User; ?>" => 2,
+        ] as $source => $line) {
+            $this->view('page', $source);
+            try {
+                $this->arc()->render('page');
+                self::fail("{$source} compiled.");
+            } catch (ArcException $error) {
+                self::assertStringContainsString(
+                    'belongs in a <?php block at the very top of the template',
+                    $error->getMessage(),
+                );
+                self::assertStringContainsString("page.arc.php on line {$line}", $error->getMessage(), $source);
+            }
+        }
+        foreach ([
+            'use ArrayObject;' => 'ArrayObject',
+            'use function App\\f, strlen;' => 'strlen',
+            'use const \\PHP_EOL;' => 'PHP_EOL',
+        ] as $use => $name) {
+            $this->view('page', "\n<?php {$use} ?>x");
+            try {
+                $this->arc()->render('page');
+                self::fail("{$use} compiled.");
+            } catch (ArcException $error) {
+                self::assertStringContainsString(
+                    "{$name} is in the global namespace and needs no import",
+                    $error->getMessage(),
+                );
+                self::assertStringContainsString('page.arc.php on line 2', $error->getMessage());
+            }
+        }
+    }
+
+    public function testAClosuresUseIsNotAnImportAndLinesStayTrueAfterImports(): void
+    {
+        $this->view('page', implode("\n", [
+            '<?php',
+            'use Crab\Arc\Arc;',
+            '$suffix = \'!\';',
+            '$shout = function (string $word) use ($suffix): string { return $word . $suffix; };',
+            '?>',
+            '{{ $shout(\'hey\') }}',
+        ]));
+        self::assertSame('hey!', $this->arc()->render('page'));
+
+        $this->view('broken', "<?php\nuse Crab\\Arc\\Arc;\n?>\n<p>\n{{ \$x + }}\n</p>");
+        $this->expectException(ArcException::class);
+        $this->expectExceptionMessage('broken.arc.php on line 5');
+        $this->arc()->render('broken');
+    }
+
     public function testUndeclaredAttributesGoToTheComponentsAttributes(): void
     {
         $this->component('button', implode("\n", [

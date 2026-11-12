@@ -96,6 +96,21 @@ A view's variables are the data given to it. `<?=` is refused: Arc builds each p
 
 Each `<?php ... ?>` block must contain complete statements, with any PHP control structures closed inside that block. Use Arc directives such as `@if` and `@foreach` to control template markup, including named slots. PHP control flow spanning blocks (for example, `<?php if ($show) { ?>...<?php } ?>`) and `goto` are compile errors. A complete PHP conditional that only sets variables inside one block is supported.
 
+### Importing names
+
+A `<?php` block at the very top of a template may start with `use` statements, so the rest of it names classes, functions and constants by their short names. Arc puts them at the top of the compiled file, where PHP takes them:
+
+```html
+<?php
+use App\Models\Product;
+use App\Shop\Carts;
+?>
+@props(Product $product)
+<input type="hidden" name="actionId" value="{{ Carts::uuid() }}">
+```
+
+Every form PHP has works: `use X as Y`, `use function`, `use const` and a group, `use App\Models\{Product, Category}`. The block may go on with other statements after its imports. A `use` anywhere else, after markup or another statement, is a compile error at its line, and so is importing a name from the global namespace, such as `use ArrayObject;`, which PHP warns has no effect. A closure's `use ($x)` is not an import and works anywhere.
+
 ### Escaping by context
 
 `{{ }}` escapes `<`, `>`, `&` and both quotes. Put attribute values inside quotes. HTML escaping does not validate URL schemes, and does not make a value safe inside JavaScript, CSS, `style`, or event-handler attributes such as `onclick`. Keep untrusted data out of those contexts; a quoted `data-*` attribute lets JavaScript read a string without inserting it into executable code.
