@@ -4,8 +4,9 @@ Crab Arc follows [semantic versioning](https://semver.org). Before 1.0, a minor 
 
 ## Unreleased
 
-- **Ready for production use:** the framework's guide no longer marks Arc experimental. Before 1.0 a minor version may still change template syntax, always with what to change in this changelog; see Stability in the README.
+## 0.3.0 — 2026-11-13
 
+- **Ready for production use:** the framework's guide no longer marks Arc experimental. Before 1.0 a minor version may still change template syntax, always with what to change in this changelog; see Stability in the README.
 - **Attributes a component does not declare:** a component that declares `array $attributes = []` receives every other attribute of its tag, by HTML name, and writes them with `@attributes($attributes, $defaults)`, joining `class` and escaping values. Attribute names on component tags may now hold `@`, `:` and `.`, as in `@click`, `x-on:click.prevent` and `hx-on::after-request`. Components without `$attributes` reject undeclared attributes at compile time as before. `@attributes` is now a directive: write `@@attributes` for the literal text.
 - **`@json($value)`:** writes a value as JSON that is safe inside `<script>`, with `<`, `>`, `&` and both quotes as `\u` escapes. In an attribute, `{{ json_encode($value) }}` stays the way. `@json` is now a directive: write `@@json` for the literal text.
 - **Imports in templates:** a `<?php` block at the very top of a template may start with `use` statements (aliases, `use function`, `use const` and groups included), which Arc puts above the compiled closure, so `@props(Product $product)` and the rest of the template take short names. A `use` anywhere else is a compile error at its line, as is a global name PHP would warn has no effect.
