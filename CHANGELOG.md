@@ -4,6 +4,8 @@ Crab Arc follows [semantic versioning](https://semver.org). Before 1.0, a minor 
 
 ## Unreleased
 
+- **Attributes a component does not declare:** a component that declares `array $attributes = []` receives every other attribute of its tag, by HTML name, and writes them with `@attributes($attributes, $defaults)`, joining `class` and escaping values. Attribute names on component tags may now hold `@`, `:` and `.`, as in `@click`, `x-on:click.prevent` and `hx-on::after-request`. Components without `$attributes` reject undeclared attributes at compile time as before. `@attributes` is now a directive: write `@@attributes` for the literal text.
+
 ## 0.2.0 — 2026-11-12
 
 - Requires `crabphp/framework` ^0.7.

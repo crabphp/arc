@@ -155,6 +155,38 @@ A layout is a component like any other: there is no `@extends` or `@section`. Th
 
 A prop the component does not declare, or a required one left out, is a compile error at the tag's line. Arc reads the component's @props declaration while compiling the caller. A component that has no file is also a compile error at the tag's line. If a component throws while it is called, the error names the calling template and tag line.
 
+### Attributes it does not declare
+
+HTML has more attributes than a component can name: `id`, `aria-*`, `data-*`, and those of htmx or Alpine. A component that declares `array $attributes = []` takes every attribute it does not declare as a prop, under its HTML name, and writes them with `@attributes`:
+
+```html
+@props(string $variant = 'primary', array $attributes = [])
+<button @attributes($attributes, ['type' => 'button', 'class' => "btn btn-{$variant}"])>
+    {!! $slot !!}
+</button>
+```
+
+```html
+<Button variant="danger" class="mt-4" aria-label="Delete order" hx-post="/orders/{{ $order->id }}/delete" disabled>
+    Delete
+</Button>
+```
+
+```html
+<button type="button" class="btn btn-danger mt-4" aria-label="Delete order" hx-post="/orders/42/delete" disabled>
+    Delete
+</button>
+```
+
+- `@attributes($attributes, $defaults)` writes the caller's attributes over the component's defaults, escaped for quoted attributes. `class` is joined, the defaults' first; any other attribute the caller gives replaces the default.
+- A class can be a list, where a key is kept when its value is true: `:class="['tab', 'active' => $current]"`.
+- `true` writes a bare attribute, such as `disabled`; `false` and `null` leave the attribute out, including a default: `:type="null"`.
+- Names a prop cannot have, such as `@click`, `x-on:click.prevent` or `hx-on::after-request`, are kept as written. A leading `:` still means a PHP expression, so Alpine's `:class` shorthand is written `x-bind:class` on a component.
+- A component passes its attributes on with `:attributes="$attributes"`; attributes written beside it are merged in the same way.
+- Without `array $attributes = []`, an attribute the component does not declare stays a compile error at the tag's line.
+
+Escaping covers the quoted value; the context rules above still apply to what the value means, such as a URL in `href` or code in `hx-on`.
+
 Variable names beginning with `$__` belong to Arc's compiler. `@props` rejects every name with that prefix, including `$__o`, `$__arc`, and generated slot and component variables. Choose other names for template locals and view data too; a single leading underscore is allowed.
 
 ## How it stays fast

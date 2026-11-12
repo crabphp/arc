@@ -21,11 +21,11 @@ final class Compiler
     /**
      * Part of every compiled file's name: a new compiler compiles again.
      */
-    public const string VERSION = '12';
+    public const string VERSION = '13';
 
     private const string MARKS = '/\{\{--|@\{\{|@@|\{!!|\{\{|<\?php|<\?=|<\/?[A-Z][A-Za-z0-9]*(?:\.[A-Z][A-Za-z0-9]*)*|@[a-z]+/';
 
-    private const array WITH_ARGUMENTS = ['if', 'elseif', 'unless', 'foreach', 'for', 'while', 'props'];
+    private const array WITH_ARGUMENTS = ['if', 'elseif', 'unless', 'foreach', 'for', 'while', 'props', 'attributes'];
     private const array WITHOUT_ARGUMENTS = [
         'else',
         'endif',
@@ -71,7 +71,7 @@ final class Compiler
     /**
      * Open component and slot tags.
      *
-     * @var list<array{kind: string, name: string, line: int, output: string, props: array<string, string>, slots: array<string, string>, blocks: int, initialize?: int, conditional?: array<string, string>}>
+     * @var list<array{kind: string, name: string, line: int, output: string, props: array<string, string>, names: array<string, string>, slots: array<string, string>, blocks: int, initialize?: int, conditional?: array<string, string>}>
      */
     private array $tags = [];
     /**
@@ -326,7 +326,7 @@ final class Compiler
             $end = match (true) {
                 $mark === '{{--' => ($close = strpos($this->source, '--}}', $saved)) === false ? null : $close + 4,
                 $mark === '<?php' => ($close = self::phpEnd($this->source, $saved, '?>')) === false ? null : $close + 2,
-                $mark === '<?=' => null,
+                $mark === '<?=', $mark === '@attributes' => null,
                 str_starts_with($mark, '</') => ($this->source[$this->position] ?? '') === '>'
                     ? $this->position + 1
                     : null,
@@ -430,6 +430,11 @@ final class Compiler
 
     private function directive(int $at, string $name): void
     {
+        if ($name === 'attributes') {
+            $arguments = $this->arguments($at, $name);
+            $this->parts[] = [false, "\\Crab\\Arc\\Attributes::render({$arguments})", null, $this->argumentsLine];
+            return;
+        }
         if (in_array($name, self::WITH_ARGUMENTS, true)) {
             $arguments = $this->arguments($at, $name);
             $this->flush();
@@ -558,7 +563,7 @@ final class Compiler
 
     private function openTag(int $at, string $name): void
     {
-        [$attributes, $selfClosing] = $this->attributes($at);
+        [$attributes, $selfClosing, $names] = $this->attributes($at);
         if ($name === 'Slot') {
             $parent = end($this->tags);
             if ($parent === false || $parent['kind'] !== 'component') {
@@ -583,6 +588,7 @@ final class Compiler
                 'line' => $this->line($at),
                 'output' => $output,
                 'props' => [],
+                'names' => [],
                 'slots' => [],
                 'blocks' => count($this->blocks),
             ];
@@ -601,9 +607,19 @@ final class Compiler
         }
         $definition = $this->definition($file, $at);
         foreach ($attributes as $prop => $_) {
-            if (!isset($definition[$prop]) && !self::hasVariadic($definition)) {
-                throw $this->error($at, "<{$name}> has no prop $" . $prop);
+            if (isset($definition[$prop]) || isset($definition['attributes']) || self::hasVariadic($definition)) {
+                continue;
             }
+            throw $this->error(
+                $at,
+                preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $prop) === 1
+                    ? "<{$name}> has no prop $"
+                    . $prop
+                    . ($names[$prop] !== $prop ? " for the attribute {$names[$prop]}" : '')
+                    . '; to accept attributes it does not declare, give it array $attributes = []'
+                    : "<{$name}> takes no attribute {$names[$prop]}; to accept attributes it does not declare,"
+                    . ' give it array $attributes = []',
+            );
         }
         $this->components[$file] ??= $this->variable('c');
         if ($selfClosing) {
@@ -618,7 +634,7 @@ final class Compiler
             }
             $this->parts[] = [
                 false,
-                $this->call($name, $attributes, [], $this->line($at)),
+                $this->call($name, $this->undeclared($name, $attributes, $names), [], $this->line($at)),
                 $this->line($at),
                 $this->line($at),
             ];
@@ -634,6 +650,7 @@ final class Compiler
             'line' => $this->line($at),
             'output' => $output,
             'props' => $attributes,
+            'names' => $names,
             'slots' => [],
             'blocks' => count($this->blocks),
             'initialize' => $initialize,
@@ -684,10 +701,48 @@ final class Compiler
         $slots['slot'] = $tag['output'];
         $this->parts[] = [
             false,
-            $this->call($name, $tag['props'], $slots, $tag['line'], $tag['conditional']),
+            $this->call(
+                $name,
+                $this->undeclared($name, $tag['props'], $tag['names']),
+                $slots,
+                $tag['line'],
+                $tag['conditional'],
+            ),
             $tag['line'],
             $tag['line'],
         ];
+    }
+
+    /**
+     * The props, with the attributes the component does not declare moved into its
+     * $attributes, by their HTML names, when it takes them.
+     *
+     * @param array<string, string> $props
+     * @param array<string, string> $names Each attribute's name as written, by prop.
+     * @return array<string, string>
+     */
+    private function undeclared(string $name, array $props, array $names): array
+    {
+        $definition = $this->definition(self::file($name), 0);
+        if (!isset($definition['attributes'])) {
+            return $props;
+        }
+        $undeclared = [];
+        foreach ($props as $prop => $expression) {
+            if ($prop === 'attributes' || isset($definition[$prop])) {
+                continue;
+            }
+            $undeclared[] = self::literal($names[$prop] ?? $prop) . ' => ' . $expression;
+            unset($props[$prop]);
+        }
+        if ($undeclared === []) {
+            return $props;
+        }
+        $array = '[' . implode(', ', $undeclared) . ']';
+        $props['attributes'] = isset($props['attributes'])
+            ? "\\Crab\\Arc\\Attributes::merge({$props['attributes']}, {$array})"
+            : $array;
+        return $props;
     }
 
     /**
@@ -722,6 +777,13 @@ final class Compiler
                 throw new ArcException("{$prop} is given to <{$name}> as an attribute and as a slot in {$this->file}.");
             }
             if (!isset($definition[$prop])) {
+                if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $prop) !== 1) {
+                    throw $this->errorForLine(
+                        $line,
+                        "<{$name}> takes no attribute {$prop}; to accept attributes it does not declare,"
+                        . ' give it array $attributes = []',
+                    );
+                }
                 $arguments[] = "{$prop}: {$expression}";
             }
         }
@@ -858,6 +920,13 @@ final class Compiler
             if (isset($definitions[$name])) {
                 throw ArcException::at($file, $line, 'The @props parameter $' . $name . ' is declared twice.');
             }
+            if ($name === 'attributes' && (strtolower($before) !== 'array' || !isset($match['default']))) {
+                throw ArcException::at(
+                    $file,
+                    $line,
+                    '@props takes the attributes it does not declare as array $attributes = [].',
+                );
+            }
             $definitions[$name] = [
                 'required' => !isset($match['default']) && $match['variadic'] === '',
                 'variadic' => $match['variadic'] !== '',
@@ -972,11 +1041,16 @@ final class Compiler
     }
 
     /**
-     * @return array{array<string, string>, bool} Each prop's PHP expression by name, and whether the tag closes itself.
+     * An attribute in kebab case fills the prop in camel case. A name that cannot be a
+     * prop, such as @click or x-on:click.prevent, is kept as it is written, for $attributes.
+     *
+     * @return array{array<string, string>, bool, array<string, string>} Each prop's PHP expression by name,
+     *     whether the tag closes itself, and each attribute's name as written, by prop.
      */
     private function attributes(int $at): array
     {
         $attributes = [];
+        $names = [];
         $length = strlen($this->source);
         while (true) {
             while ($this->position < $length && ctype_space($this->source[$this->position])) {
@@ -987,21 +1061,24 @@ final class Compiler
             }
             if (substr($this->source, $this->position, 2) === '/>') {
                 $this->position += 2;
-                return [$attributes, true];
+                return [$attributes, true, $names];
             }
             if ($this->source[$this->position] === '>') {
                 $this->position++;
-                return [$attributes, false];
+                return [$attributes, false, $names];
             }
-            if (!preg_match('/\G(:?)([A-Za-z_][A-Za-z0-9_-]*)/', $this->source, $match, 0, $this->position)) {
+            if (!preg_match('/\G(:?)([A-Za-z_@][A-Za-z0-9_:.@-]*)/', $this->source, $match, 0, $this->position)) {
                 throw $this->error($at, 'An attribute name is expected in the component tag');
             }
             $this->position += strlen($match[0]);
             $bound = $match[1] === ':';
-            $prop = lcfirst(str_replace(' ', '', ucwords(str_replace('-', ' ', $match[2]))));
+            $prop = preg_match('/^[A-Za-z_][A-Za-z0-9_-]*$/', $match[2]) === 1
+                ? lcfirst(str_replace(' ', '', ucwords(str_replace('-', ' ', $match[2]))))
+                : $match[2];
             if (isset($attributes[$prop])) {
                 throw $this->error($at, "The attribute {$match[2]} is given twice");
             }
+            $names[$prop] = $match[2];
             if (($this->source[$this->position] ?? '') !== '=') {
                 if ($bound) {
                     throw $this->error($at, ":{$match[2]} needs a PHP expression, such as :{$match[2]}=\"\$value\"");

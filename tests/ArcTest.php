@@ -796,6 +796,18 @@ final class ArcTest extends TestCase
         self::assertSame('Order &lt;7&gt;', $body->render(['number' => '<7>']));
     }
 
+    public function testReadmeAttributesExampleRendersAsDocumented(): void
+    {
+        $this->component('button', $this->readmeBlock('html', '@props(string $variant'));
+        $this->view('page', $this->readmeBlock('html', '<Button variant="danger"'));
+        $collapse = static fn(string $html): string => trim((string) preg_replace('/\s+/', ' ', $html));
+
+        self::assertSame(
+            $collapse($this->readmeBlock('html', '<button type="button" class="btn btn-danger')),
+            $collapse($this->arc()->render('page', ['order' => (object) ['id' => 42]])),
+        );
+    }
+
     public function testReadmeUrlExamplesRejectUnsafeSchemesAndEscapeAttributes(): void
     {
         $prepare = $this->directory . '/prepare-url.php';
@@ -842,6 +854,121 @@ final class ArcTest extends TestCase
             self::assertSame(0, proc_close($process), $error);
             self::assertStringContainsString('Arc', $output);
             self::assertStringContainsString('us/render', $output);
+        }
+    }
+
+    public function testUndeclaredAttributesGoToTheComponentsAttributes(): void
+    {
+        $this->component('button', implode("\n", [
+            '@props(string $variant = \'primary\', array $attributes = [])',
+            '<button @attributes($attributes, [\'type\' => \'button\', \'class\' => "btn btn-{$variant}"])>{!! $slot !!}</button>',
+        ]));
+        $this->view('page', implode(' ', [
+            '<Button variant="danger" class="mt-4" id="delete" aria-label=\'Say "hi"\'',
+            'hx-post="/orders/{{ $id }}/delete" data-id="{{ $id }}" @click="open = true"',
+            'x-on:click.prevent="go()" hx-on::after-request="done()" disabled :hidden="false">Delete</Button>',
+        ]));
+
+        self::assertSame('<button type="button" class="btn btn-danger mt-4" id="delete" aria-label="Say &quot;hi&quot;"'
+        . ' hx-post="/orders/42/delete" data-id="42" @click="open = true" x-on:click.prevent="go()"'
+        . ' hx-on::after-request="done()" disabled>Delete</button>', $this->arc()->render('page', ['id' => 42]));
+    }
+
+    public function testAttributesJoinClassesAndOverrideOtherDefaults(): void
+    {
+        $this->component('button', implode("\n", [
+            '@props(array $attributes = [])',
+            '<button @attributes($attributes, [\'type\' => \'button\', \'class\' => \'btn\'])>{!! $slot !!}</button>',
+        ]));
+        $this->view('page', implode("\n", [
+            '<Button :class="[\'active\' => $on, \'big\', \'hidden\' => false]" type="submit" />',
+            '<Button :class="null" />',
+            '<Button :type="null" />',
+        ]));
+
+        self::assertSame(
+            implode("\n", [
+                '<button type="submit" class="btn active big"></button>',
+                '<button type="button" class="btn"></button>',
+                '<button class="btn"></button>',
+            ]),
+            $this->arc()->render('page', ['on' => 1]),
+        );
+    }
+
+    public function testAComponentForwardsItsAttributesToAnother(): void
+    {
+        $this->component('button', implode("\n", [
+            '@props(array $attributes = [])',
+            '<button @attributes($attributes, [\'type\' => \'button\', \'class\' => \'btn\'])>{!! $slot !!}</button>',
+        ]));
+        $this->component('icon-button', implode("\n", [
+            '@props(string $icon, array $attributes = [])',
+            '<Button :attributes="$attributes" class="icon">{{ $icon }}</Button>',
+        ]));
+        $this->view('page', '<IconButton icon="&" class="mt-2" title="Star" />');
+
+        self::assertSame(
+            '<button type="button" class="btn mt-2 icon" title="Star">&amp;</button>',
+            $this->arc()->render('page'),
+        );
+    }
+
+    public function testWithoutAttributesUndeclaredAttributesAreCompileErrors(): void
+    {
+        $this->component('card', '@props(string $title){{ $title }}');
+        foreach ([
+            '<Card title="x" class="y" />' => 'has no prop $class; to accept attributes it does not declare, give it array $attributes = []',
+            '<Card title="x" aria-label="y" />' => 'has no prop $ariaLabel for the attribute aria-label',
+            '<Card title="x" @click="y" />' => '<Card> takes no attribute @click',
+        ] as $source => $message) {
+            $this->view('page', "\n" . $source);
+            try {
+                $this->arc()->render('page');
+                self::fail("{$source} compiled.");
+            } catch (ArcException $error) {
+                self::assertStringContainsString($message, $error->getMessage());
+                self::assertStringContainsString('page.arc.php on line 2', $error->getMessage());
+            }
+        }
+    }
+
+    public function testAttributesMustBeAnArrayWithADefault(): void
+    {
+        foreach (['string $attributes = \'\'', 'array $attributes', '?array $attributes = null'] as $declaration) {
+            $this->component('card', "@props({$declaration})x");
+            $this->view('page', '<Card />');
+            try {
+                $this->arc()->render('page');
+                self::fail("@props({$declaration}) compiled.");
+            } catch (ArcException $error) {
+                self::assertStringContainsString('as array $attributes = []', $error->getMessage());
+            }
+        }
+    }
+
+    public function testAttributesDirectiveEscapesAndChecksNames(): void
+    {
+        $this->view(
+            'page',
+            '<a @attributes([\'href\' => $url, \'class\' => [\'link\', \'on\' => $on], \'data-x\' => 1.5])>x</a>',
+        );
+        self::assertSame('<a href="/?q=&quot;&gt;&lt;script&gt;" class="link on" data-x="1.5">x</a>', $this->arc()->render('page', [
+            'url' => '/?q="><script>',
+            'on' => true,
+        ]));
+
+        foreach ([
+            [['a b' => 'x'], '"a b" is not an HTML attribute name'],
+            [['x"y' => 'x'], 'is not an HTML attribute name'],
+            [['data' => ['x']], 'The attribute data needs a string, number or boolean, not array'],
+        ] as [$attributes, $message]) {
+            try {
+                \Crab\Arc\Attributes::render($attributes);
+                self::fail('Rendered ' . json_encode($attributes));
+            } catch (ArcException $error) {
+                self::assertStringContainsString($message, $error->getMessage());
+            }
         }
     }
 
