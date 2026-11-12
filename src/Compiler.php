@@ -21,7 +21,7 @@ final class Compiler
     /**
      * Part of every compiled file's name: a new compiler compiles again.
      */
-    public const string VERSION = '13';
+    public const string VERSION = '14';
 
     private const string MARKS = '/\{\{--|@\{\{|@@|\{!!|\{\{|<\?php|<\?=|<\/?[A-Z][A-Za-z0-9]*(?:\.[A-Z][A-Za-z0-9]*)*|@[a-z]+/';
 

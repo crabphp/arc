@@ -604,16 +604,16 @@ final class ArcTest extends TestCase
         self::assertSame([], glob($this->directory . '/cache/*.php'));
     }
 
-    public function testCompileAllChecksExistingArtifactsWithoutExecutingTemplates(): void
+    public function testCompileAllReplacesAChangedArtifactWithoutExecutingTemplates(): void
     {
         $this->view('page', "<?php throw new \\RuntimeException('Do not run'); ?>\n{{ \$value }}");
         self::assertSame(1, $this->arc()->compileAll());
         $compiled = glob($this->directory . '/cache/*.php')[0];
-        $code = file_get_contents($compiled);
+        $code = (string) file_get_contents($compiled);
         file_put_contents($compiled, str_replace('($value)', '($value +)', $code));
-        $this->expectException(ArcException::class);
-        $this->expectExceptionMessage('page.arc.php on line 2');
-        $this->arc()->compileAll();
+
+        self::assertSame(1, $this->arc()->compileAll(), 'The template is compiled again, and not run.');
+        self::assertSame($code, file_get_contents($compiled), 'What was changed is gone.');
     }
 
     /**
@@ -666,7 +666,7 @@ final class ArcTest extends TestCase
     }
 
     #[DataProvider('compileFatalCases')]
-    public function testWorkersAndDeploymentRejectCachedCompileFatals(
+    public function testWorkersAndDeploymentCompileAgainAnArtifactChangedIntoACompileFatal(
         string $valid,
         string $from,
         string $to,
@@ -695,8 +695,13 @@ final class ArcTest extends TestCase
             $output = stream_get_contents($pipes[1]);
             fclose($pipes[1]);
             self::assertSame(0, proc_close($process), $output);
-            self::assertStringStartsWith('CAUGHT: ', $output);
-            self::assertStringContainsString('card.arc.php on line ' . $line, $output);
+            self::assertSame(
+                'ACCEPTED',
+                $output,
+                'The changed artifact is never required; its template is compiled again.',
+            );
+            self::assertStringNotContainsString($to, (string) file_get_contents($compiled));
+            file_put_contents($compiled, str_replace($from, $to, (string) file_get_contents($compiled)));
         }
     }
 
@@ -707,21 +712,26 @@ final class ArcTest extends TestCase
         self::assertFileDoesNotExist($marker);
     }
 
-    public function testWorkersRefuseCachedArtifactsWhenTheValidatorCannotRun(): void
+    public function testWorkersLoadCompiledTemplatesWithoutStartingAProcess(): void
     {
         $this->view('page', 'Hello');
-        self::assertSame(1, $this->arc()->compileAll());
+        $this->view('later', 'Not compiled yet');
+        $arc = $this->arc();
+        $arc->render('page');
         $script = $this->directory . '/worker.php';
         file_put_contents(
             $script,
             '<?php require ' . var_export(dirname(__DIR__) . '/vendor/autoload.php', true) . ';' . <<<'PHP'
-                try {
-                    echo new Crab\Arc\Arc(__DIR__ . '/views', __DIR__ . '/cache')->render('page');
-                } catch (Crab\Arc\ArcException $error) {
-                    echo $error->getMessage();
+                foreach (['page', 'later'] as $view) {
+                    try {
+                        echo new Crab\Arc\Arc(__DIR__ . '/views', __DIR__ . '/cache')->render($view), "\n";
+                    } catch (Crab\Arc\ArcException $error) {
+                        echo $error->getMessage(), "\n";
+                    }
                 }
                 PHP,
         );
+        // Without proc_open, a worker loads what deployment compiled, and refuses to compile anything itself.
         $process = proc_open(
             [PHP_BINARY, '-d', 'disable_functions=proc_open', $script],
             [1 => ['pipe', 'w'], 2 => ['redirect', 1]],
@@ -730,8 +740,9 @@ final class ArcTest extends TestCase
         $output = stream_get_contents($pipes[1]);
         fclose($pipes[1]);
         self::assertSame(0, proc_close($process), $output);
-        self::assertStringContainsString('requires proc_open and the PHP CLI', $output);
-        self::assertStringNotContainsString('Hello', $output);
+        [$page, $later] = explode("\n", (string) $output);
+        self::assertSame('Hello', $page);
+        self::assertStringContainsString('requires proc_open and the PHP CLI', $later);
     }
 
     public function testNamesAreCheckedAndMissingTemplatesNamed(): void

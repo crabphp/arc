@@ -22,6 +22,11 @@ use Crab\Http\Response;
 final class Arc
 {
     /**
+     * Starts the last line of an artifact, which holds the hash of the compiled PHP before it.
+     */
+    private const string STAMP = '// Arc checked: ';
+
+    /**
      * @var array<string, \Closure(self, array<string, mixed>): string>
      */
     private array $views = [];
@@ -167,7 +172,8 @@ final class Arc
                 . " has no template at {$file}.",
             );
         }
-        $identity = Compiler::VERSION . "\0" . $file . "\0" . $source;
+        // A new PHP compiles again, so an artifact is only ever loaded by the PHP that checked it.
+        $identity = Compiler::VERSION . "\0" . PHP_VERSION . "\0" . $file . "\0" . $source;
         $index = $this->cache . '/' . $name . '.' . hash('xxh128', $identity) . '.deps.json';
         $manifest = @file_get_contents($index);
         $dependencies = json_decode($manifest === false ? 'null' : $manifest, true);
@@ -190,22 +196,43 @@ final class Arc
             $identity .= "\0" . $dependency . "\0" . hash('xxh128', $dependencySource);
         }
         $compiled = $this->cache . '/' . $name . '.' . hash('xxh128', $identity) . '.php';
-        if (!is_file($compiled)) {
+        $cached = is_file($compiled) ? @file_get_contents($compiled) : null;
+        if ($cached === false) {
+            throw new ArcException("Cannot read the compiled template {$compiled}.");
+        }
+        // An artifact is written only after the compiled PHP passed a check in a PHP process of its own,
+        // and it carries the hash of what passed. One whose hash does not match was changed since, so it
+        // is compiled again from its template: what loads is always what was checked, and a worker loads
+        // it without starting a process.
+        if ($cached === null || !self::intact($cached)) {
             $code ??= $this->compiler->compile($source, $file, $component, $this->exists, $this->props);
-            $this->write($compiled, $code);
-        } else {
-            // A fresh worker must validate existing artifacts before require too.
-            // Loaded closures bypass this path on every subsequent render.
-            $cached = @file_get_contents($compiled);
-            if ($cached === false) {
-                throw new ArcException("Cannot read the compiled template {$compiled}.");
-            }
-            Compiler::validate($cached, $file);
+            $this->write($compiled, self::stamp($code));
         }
         if ($code !== null) {
             $this->write($index, json_encode($dependencies, JSON_THROW_ON_ERROR));
         }
         return $compiled;
+    }
+
+    /**
+     * The artifact as written: the compiled PHP, then a last line with its hash.
+     */
+    private static function stamp(string $code): string
+    {
+        return $code . self::STAMP . hash('sha256', $code) . "\n";
+    }
+
+    /**
+     * Whether an artifact is exactly what was compiled and checked.
+     */
+    private static function intact(string $artifact): bool
+    {
+        $at = strrpos($artifact, self::STAMP);
+        if ($at === false) {
+            return false;
+        }
+        $code = substr($artifact, 0, $at);
+        return hash_equals(self::stamp($code), $artifact);
     }
 
     private static function validName(string $name): bool
