@@ -250,6 +250,12 @@ The plugin is named Arc, but its console commands use the framework-level `view:
 | `view.path` | `resources/views` | The templates, relative to the application |
 | `view.cache` | `storage/view` | Where compiled templates are written |
 
+## Stability
+
+Arc follows [semantic versioning](https://semver.org). Before 1.0, a minor version may change template syntax or behaviour, and its entry in the [changelog](CHANGELOG.md) says what to change in your templates; a patch version only fixes. A change that could alter rendered output, such as a new directive taking over `@name` text, is always called out there with how to keep the old output (`@@name`).
+
+What Arc promises in every version: `{{ }}` escapes, an undeclared or missing prop is a compile error at the tag's line, and a worker only ever loads a compiled template that passed the PHP check.
+
 ## License
 
 MIT
