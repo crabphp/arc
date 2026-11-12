@@ -868,6 +868,54 @@ final class ArcTest extends TestCase
         }
     }
 
+    public function testJsonIsSafeInAScriptAndAnAttributeTakesItEscaped(): void
+    {
+        $this->view('page', implode("\n", [
+            '<script>window.cart = @json($cart);</script>',
+            '<div x-data="{{ json_encode($cart) }}"></div>',
+        ]));
+        $cart = [
+            'name' => "</script><script>alert('x')</script><!--",
+            'note' => 'Tom & "Jerry"',
+            'price' => 1.0,
+            'city' => 'Hà Nội',
+            'line' => "a\u{2028}b",
+        ];
+        $html = $this->arc()->render('page', ['cart' => $cart]);
+        [$script, $div] = explode("\n", $html);
+
+        $json = substr($script, strlen('<script>window.cart = '), -strlen(';</script>'));
+        self::assertSame($cart, json_decode($json, true), 'It reads back as it was.');
+        foreach (['<', '>', '&', "'"] as $character) {
+            self::assertStringNotContainsString(
+                $character,
+                $json,
+                "{$character} could end the script or start markup.",
+            );
+        }
+        self::assertStringContainsString('Hà Nội', $json, 'Text stays readable.');
+        self::assertStringContainsString('1.0', $json, 'A float stays a float.');
+
+        self::assertSame(
+            1,
+            preg_match('/^<div x-data="([^"]*)"><\/div>$/', $div, $attribute),
+            'No quote ends the attribute early.',
+        );
+        // Plain json_encode() writes 1.0 as 1; @json keeps the fraction.
+        self::assertEquals($cart, json_decode(html_entity_decode($attribute[1], ENT_QUOTES), true));
+
+        $this->view('broken', "\n@json(\$value)");
+        try {
+            $this->arc()->render('broken', ['value' => INF]);
+            self::fail('A value JSON cannot hold was written.');
+        } catch (\JsonException $error) {
+            self::assertStringContainsString('Inf and NaN cannot be JSON encoded', $error->getMessage());
+        }
+        $this->view('two', '@json($a, 0)');
+        $this->expectException(ArcException::class);
+        $this->arc()->render('two', ['a' => 1]);
+    }
+
     public function testTemplatesImportNamesAtTheTop(): void
     {
         $this->component('card', implode("\n", [

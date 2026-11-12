@@ -88,6 +88,7 @@ final class ReceiptBody
 | `@unless(...)` `@endunless` | `@if` the other way round |
 | `@foreach(...)` `@endforeach`, `@for(...)` `@endfor`, `@while(...)` `@endwhile` | Loops, with `@break` and `@continue` |
 | `<?php ... ?>` | PHP statements, such as setting a variable. Do not echo: write the result with `{{ }}` |
+| `@json($value)` | A value as JSON inside `<script>` |
 | `@@`, `@{{` | A literal `@` and `{{` |
 
 A line that holds only a statement, such as `@foreach(...)` or `{{-- --}}`, leaves no blank line in the page. An `@` that is not one of these, as in an email address, is text.
@@ -113,7 +114,14 @@ Every form PHP has works: `use X as Y`, `use function`, `use const` and a group,
 
 ### Escaping by context
 
-`{{ }}` escapes `<`, `>`, `&` and both quotes. Put attribute values inside quotes. HTML escaping does not validate URL schemes, and does not make a value safe inside JavaScript, CSS, `style`, or event-handler attributes such as `onclick`. Keep untrusted data out of those contexts; a quoted `data-*` attribute lets JavaScript read a string without inserting it into executable code.
+`{{ }}` escapes `<`, `>`, `&` and both quotes. Put attribute values inside quotes. HTML escaping does not validate URL schemes, and does not make a value safe inside JavaScript, CSS, `style`, or event-handler attributes such as `onclick`. Keep untrusted data out of those contexts, and hand data to JavaScript in one of two ways:
+
+```html
+<script>window.cart = @json($cart);</script>
+<div x-data="{{ json_encode($cart) }}"></div>
+```
+
+Inside `<script>`, `@json($value)` writes the value as JSON with `<`, `>`, `&`, `'` and `"` inside its strings written as `\u` escapes, so no value can end the script or open a comment, and floats keep their fraction. A value JSON cannot hold, such as `INF`, throws `JsonException`. In an attribute, write `{{ json_encode($value) }}`: `{{ }}` escapes the JSON's own quotes, and the browser undoes that before JavaScript reads the attribute. `@json` is not for a double-quoted attribute, where the JSON's quotes would end it.
 
 Build local links from a fixed path and encode each dynamic path segment:
 

@@ -21,11 +21,21 @@ final class Compiler
     /**
      * Part of every compiled file's name: a new compiler compiles again.
      */
-    public const string VERSION = '14';
+    public const string VERSION = '15';
 
     private const string MARKS = '/\{\{--|@\{\{|@@|\{!!|\{\{|<\?php|<\?=|<\/?[A-Z][A-Za-z0-9]*(?:\.[A-Z][A-Za-z0-9]*)*|@[a-z]+/';
 
-    private const array WITH_ARGUMENTS = ['if', 'elseif', 'unless', 'foreach', 'for', 'while', 'props', 'attributes'];
+    private const array WITH_ARGUMENTS = [
+        'if',
+        'elseif',
+        'unless',
+        'foreach',
+        'for',
+        'while',
+        'props',
+        'attributes',
+        'json',
+    ];
     private const array WITHOUT_ARGUMENTS = [
         'else',
         'endif',
@@ -338,7 +348,7 @@ final class Compiler
             $end = match (true) {
                 $mark === '{{--' => ($close = strpos($this->source, '--}}', $saved)) === false ? null : $close + 4,
                 $mark === '<?php' => ($close = self::phpEnd($this->source, $saved, '?>')) === false ? null : $close + 2,
-                $mark === '<?=', $mark === '@attributes' => null,
+                $mark === '<?=', $mark === '@attributes', $mark === '@json' => null,
                 str_starts_with($mark, '</') => ($this->source[$this->position] ?? '') === '>'
                     ? $this->position + 1
                     : null,
@@ -575,6 +585,18 @@ final class Compiler
         if ($name === 'attributes') {
             $arguments = $this->arguments($at, $name);
             $this->parts[] = [false, "\\Crab\\Arc\\Attributes::render({$arguments})", null, $this->argumentsLine];
+            return;
+        }
+        if ($name === 'json') {
+            // Every character that could end a <script> or a quoted attribute is written as \u escapes,
+            // so the JSON is safe in both. One value only: the flags are Arc's.
+            $arguments = $this->arguments($at, $name);
+            $this->parts[] = [
+                false,
+                "\\json_encode(({$arguments}), \\JSON_THROW_ON_ERROR | \\JSON_HEX_TAG | \\JSON_HEX_AMP | \\JSON_HEX_APOS | \\JSON_HEX_QUOT | \\JSON_UNESCAPED_UNICODE | \\JSON_UNESCAPED_SLASHES | \\JSON_PRESERVE_ZERO_FRACTION)",
+                null,
+                $this->argumentsLine,
+            ];
             return;
         }
         if (in_array($name, self::WITH_ARGUMENTS, true)) {
